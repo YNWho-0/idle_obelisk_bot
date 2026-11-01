@@ -23,6 +23,8 @@ ANCHORS = [
     ("grid_button",    "n10_mining_bugs_crate_1.png", (338, 1188, 386, 1234)),
     # Store icon awning only: the icon background fills green as freebies bank up
     ("store_icon",     "n45_store_closed.png",        (598, 1195, 634, 1205)),
+    # ...and its "freebie bank full" form: solid green with a gift chest
+    ("store_icon_full", "n90_mining_store_full.png",  (594, 1192, 634, 1226)),
     # Store screen (its close X is also the grid menu's)
     ("store_close",    "n42_store_freebie_ready.png", (414, 1188, 466, 1234)),
     ("loot_tables",    "n42_store_freebie_ready.png", (553, 89, 663, 124)),
@@ -30,7 +32,7 @@ ANCHORS = [
     ("claim_ready",    "n42_store_freebie_ready.png", (550, 665, 644, 726)),
     ("claim_empty",    "n44_freebie_claimed.png",     (550, 665, 644, 726)),
     # Lootbug popup (a GEM SHOP below the header; only ever press its top-right X)
-    ("lootbug_header", "n21_lootbug_popup_settled.png", (186, 121, 445, 160)),
+    ("lootbug_header", "n21_lootbug_popup_settled.png", (250, 128, 420, 154)),  # words only: the row is centred, shifts with the count
     ("lootbug_close",  "n21_lootbug_popup_settled.png", (575, 148, 625, 197)),
     # Lootbug sprite on the field (head + body, no flapping wings)
     ("lootbug_red_1",  "n10_mining_bugs_crate_1.png", (377, 605, 409, 690)),

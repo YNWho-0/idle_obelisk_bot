@@ -74,7 +74,7 @@ class FreebieJob:
         if screens.identify(frame) != MINING:
             raise JobAborted("not on mining screen", frame)
 
-        icon = A.get("store_icon").find(frame)
+        icon = screens.store_button(frame)
         dev.press(*icon.center)
         frame = wait_for(dev, lambda f: screens.identify(f) == STORE, timeout=6)
         if frame is None:

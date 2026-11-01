@@ -52,12 +52,13 @@ class A:
             "anvil_button":   dict(home=(58, 1188, 106, 1234)),
             "grid_button":    dict(home=(338, 1188, 386, 1234)),
             "store_icon":     dict(home=(598, 1195, 634, 1205)),
+            "store_icon_full": dict(home=(594, 1192, 634, 1226), threshold=0.85),
             "store_close":    dict(home=(414, 1188, 466, 1234)),
             "loot_tables":    dict(home=(553, 89, 663, 124)),
             "freebie_header": dict(home=(137, 624, 297, 651), search=FREEBIE_BAND),
             "claim_ready":    dict(home=(550, 665, 644, 726), threshold=0.85),
             "claim_empty":    dict(home=(550, 665, 644, 726), threshold=0.85),
-            "lootbug_header": dict(home=(186, 121, 445, 160)),
+            "lootbug_header": dict(home=(250, 128, 420, 154), margin=20, threshold=0.85),
             "lootbug_close":  dict(home=(575, 148, 625, 197)),
             **{n: dict(home=LOOTBUG_HOMES[n], threshold=0.75, search=LOOTBUG_FIELD)
                for n in LOOTBUG_HOMES},
@@ -78,6 +79,11 @@ def right_size(frame: np.ndarray) -> bool:
     return frame.shape[:2] == (HEIGHT, WIDTH)
 
 
+def store_button(frame: np.ndarray) -> Optional[Match]:
+    """The bottom-bar Store button: normal (awning) or 'freebie bank full' form."""
+    return A.get("store_icon").find(frame) or A.get("store_icon_full").find(frame)
+
+
 def identify(frame: np.ndarray) -> str:
     if not right_size(frame):
         return UNKNOWN
@@ -94,13 +100,15 @@ def identify(frame: np.ndarray) -> str:
     if A.get("store_close").find(frame) and A.get("grid_cloud_button").find(frame):
         return GRID_MENU
     if (A.get("anvil_button").find(frame) and A.get("grid_button").find(frame)
-            and A.get("store_icon").find(frame) and not A.get("store_close").find(frame)):
+            and store_button(frame) and not A.get("store_close").find(frame)):
         return MINING
     return UNKNOWN
 
 
 def store_fill(frame: np.ndarray) -> float:
     """0..1: how far the Store icon's green 'banked freebies' gauge has risen."""
+    if right_size(frame) and A.get("store_icon_full").find(frame) is not None:
+        return 1.0                       # bank full: the whole icon is green
     if not right_size(frame) or A.get("store_icon").find(frame) is None:
         return 0.0
     y1, y2 = STORE_FILL_ROWS

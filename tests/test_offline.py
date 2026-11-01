@@ -71,6 +71,8 @@ F = {
     "off_res": "n74_offline_results.png",
     "after_offline": "n75_after_offline_close.png",
     "options": "n70_options.png",
+    "store_full": "n90_mining_store_full.png",      # Store button in its 'bank full' form
+    "bug_popup_15": "n91_lootbug_popup_15.png",     # 2-digit count shifts the centred header
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -149,7 +151,8 @@ def test_identify():
         "store_ready": screens.STORE, "store_empty": screens.STORE, "store_top": screens.STORE,
         "bug_popup": screens.LOOTBUG_POPUP, "grid": screens.GRID_MENU, "cloud": screens.CLOUD,
         "off_opts": screens.OFFLINE_OPTIONS, "off_res": screens.OFFLINE_RESULTS,
-        "options": screens.UNKNOWN,
+        "options": screens.UNKNOWN, "store_full": screens.MINING,
+        "bug_popup_15": screens.LOOTBUG_POPUP,
     }
     for k, v in expect.items():
         assert screens.identify(FRAMES[k]) == v, (k, screens.identify(FRAMES[k]))
@@ -238,6 +241,16 @@ def test_freebie_job_claims_and_closes():
     })
     assert FreebieJob().run(dev) == "claimed"
     assert [p[0] for p in dev.presses] == ["mining_bugs", "store_ready", "store_empty"]
+
+
+def test_freebie_job_from_full_bank_icon():
+    dev = FakeDevice("store_full", {
+        "store_full": [(STORE_ICON, ["store_ready"])],
+        "store_ready": [(CLAIM, ["store_toast", "store_empty"])],
+        "store_empty": [(STORE_X, ["store_closed"])],
+    })
+    assert FreebieJob().run(dev) == "claimed"
+    assert screens.store_fill(FRAMES["store_full"]) == 1.0
 
 
 def test_freebie_job_scrolls_to_the_row():

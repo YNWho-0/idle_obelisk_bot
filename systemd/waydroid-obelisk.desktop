@@ -2,6 +2,6 @@
 Type=Application
 Name=Waydroid + Idle Obelisk Miner (for the bot)
 Comment=Starts the Waydroid session after login so the obelisk bot can run; the bot then keeps the game in the background between sessions. Install: cp to ~/.config/autostart/
-Exec=sh -c "sleep 20; waydroid app launch com.checkbox.minershminer"
+Exec=/home/raspberry/idle_obelisk_bot/scripts/waydroid_autostart.sh
 X-GNOME-Autostart-enabled=true
 NoDisplay=true
