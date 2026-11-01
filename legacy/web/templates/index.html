@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Idle Obelisk Miner Bot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Idle Obelisk Miner Bot</h1>
+    <span id="status-pill" class="pill">connecting…</span>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Screen</h2>
+      <img id="screenshot" alt="last screenshot" />
+      <p class="muted" id="screenshot-age"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Controls</h2>
+      <div class="controls">
+        <button id="pause-btn">Pause tasks</button>
+        <button id="resume-btn">Resume tasks</button>
+      </div>
+      <h3>Task counts</h3>
+      <ul id="task-counts"></ul>
+      <h3>Workflows</h3>
+      <ul id="workflows"></ul>
+    </section>
+
+    <section class="panel wide">
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

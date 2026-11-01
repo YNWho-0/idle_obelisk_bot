@@ -1,0 +1,18 @@
+[Unit]
+Description=Idle Obelisk Miner automation bot
+After=network.target waydroid-container.service
+Wants=waydroid-container.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/idle_obelisk_bot
+ExecStart=/usr/bin/python3 /home/pi/idle_obelisk_bot/scripts/run_bot.py
+Restart=on-failure
+RestartSec=10
+# Keep this low-priority so it doesn't compete with anything else on the Pi
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

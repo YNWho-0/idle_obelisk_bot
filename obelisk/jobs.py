@@ -1,0 +1,204 @@
+"""Jobs. Each press targets an anchor matched on a fresh frame, and is
+followed by waiting for the expected result; anything unexpected aborts."""
+
+from __future__ import annotations
+
+import logging
+import time
+from pathlib import Path
+from typing import Callable, Optional
+
+import cv2
+import numpy as np
+
+from . import screens
+from .screens import A, LOOTBUG_POPUP, MINING, STORE
+
+log = logging.getLogger("obelisk.jobs")
+
+FAIL_DIR = Path(__file__).resolve().parent.parent / "logs" / "failures"
+
+
+class JobAborted(RuntimeError):
+    def __init__(self, reason: str, frame: Optional[np.ndarray] = None):
+        super().__init__(reason)
+        self.frame = frame
+
+
+def wait_for(dev, pred: Callable[[np.ndarray], object], timeout: float,
+             interval: float = 0.4) -> Optional[np.ndarray]:
+    """Capture until pred(frame) is truthy; returns that frame or None."""
+    deadline = time.monotonic() + timeout
+    while True:
+        frame = dev.capture()
+        if pred(frame):
+            return frame
+        if time.monotonic() >= deadline:
+            return None
+        dev.sleep(interval)
+
+
+def save_failure(frame: Optional[np.ndarray], reason: str) -> None:
+    if frame is None:
+        return
+    FAIL_DIR.mkdir(parents=True, exist_ok=True)
+    slug = "".join(c if c.isalnum() else "_" for c in reason)[:40]
+    path = FAIL_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}_{slug}.png"
+    cv2.imwrite(str(path), frame)
+    log.warning("saved failure screenshot %s", path)
+
+
+class FreebieJob:
+    """Open Store -> claim Freebie Pack if ready -> verify -> close Store."""
+
+    name = "freebie"
+    MIN_GAP = 60 * 60       # claim at most hourly when the badge says ready
+    MAX_GAP = 2 * 60 * 60   # open the Store anyway this often (badge fallback)
+
+    def __init__(self):
+        self.last_run = float("-inf")
+
+    def due(self, now: float, frame: np.ndarray) -> bool:
+        since = now - self.last_run
+        if since >= self.MAX_GAP:
+            return True
+        return since >= self.MIN_GAP and screens.store_badge(frame)
+
+    def run(self, dev) -> str:
+        """Returns 'claimed' or 'nothing'; raises JobAborted otherwise."""
+        self.last_run = time.monotonic()
+        frame = dev.capture()
+        if screens.identify(frame) != MINING:
+            raise JobAborted("not on mining screen", frame)
+
+        icon = A.get("store_icon").find(frame)
+        dev.press(*icon.center)
+        frame = wait_for(dev, lambda f: screens.identify(f) == STORE, timeout=6)
+        if frame is None:
+            raise JobAborted("store did not open", dev.capture())
+
+        try:
+            frame = wait_for(dev, lambda f: screens.freebie_state(f)[0] != "unknown", timeout=3)
+            if frame is None:
+                raise JobAborted("freebie row not recognised", dev.capture())
+            state, claim = screens.freebie_state(frame)
+            if state == "ready":
+                dev.press(*claim.center)
+                done = wait_for(dev, lambda f: screens.freebie_state(f)[0] == "empty", timeout=8)
+                if done is None:
+                    raise JobAborted("claim not verified (button not dimmed)", dev.capture())
+                log.info("freebie claimed")
+                result = "claimed"
+            else:
+                log.info("freebie: nothing banked")
+                result = "nothing"
+        except JobAborted:
+            try:
+                close_store(dev)
+            except JobAborted as e2:
+                log.error("also could not close store: %s", e2)
+            raise
+        close_store(dev)
+        return result
+
+
+def close_store(dev) -> None:
+    frame = dev.capture()
+    if screens.identify(frame) != STORE:
+        raise JobAborted("expected store before closing", frame)
+    dev.press(*A.get("store_close").find(frame).center)
+    if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
+        raise JobAborted("store did not close", dev.capture())
+
+
+class LootbugJob:
+    """Press a lootbug on the field -> popup -> close it. One press loots all
+    (game option "Tap any Lootbug to Loot-All").
+
+    Free loot is credited automatically (game option "Auto-Loot free Lootbug
+    offerings"); the popup itself is a gem shop, so the only thing ever pressed
+    in it is its top-right X.
+    """
+
+    name = "lootbug"
+    MIN_GAP = 60       # seconds between attempts
+    CHECK_EVERY = 20   # seconds between looks (bugs bank for hours; matching is slow)
+
+    def __init__(self):
+        self.last_run = float("-inf")
+        self.last_check = float("-inf")
+
+    def due(self, now: float, frame: np.ndarray) -> bool:
+        if now - self.last_run < self.MIN_GAP or now - self.last_check < self.CHECK_EVERY:
+            return False
+        self.last_check = now
+        return screens.lootbug_sprite(frame) is not None
+
+    def run(self, dev) -> str:
+        self.last_run = time.monotonic()
+        frame = dev.capture()
+        if screens.identify(frame) != MINING:
+            raise JobAborted("not on mining screen", frame)
+        bug = screens.lootbug_sprite(frame)
+        if bug is None:
+            return "none"
+        dev.press(*bug.center)
+        if wait_for(dev, lambda f: screens.identify(f) == LOOTBUG_POPUP, timeout=5) is None:
+            raise JobAborted("lootbug popup did not open", dev.capture())
+        close_lootbug_popup(dev)
+        if screens.lootbug_sprite(dev.capture()) is not None:
+            log.warning("a lootbug is still on the field after looting (new arrival?)")
+        log.info("lootbugs looted")
+        return "looted"
+
+
+def close_lootbug_popup(dev) -> None:
+    frame = dev.capture()
+    if screens.identify(frame) != LOOTBUG_POPUP:
+        raise JobAborted("expected lootbug popup before closing", frame)
+    dev.press(*A.get("lootbug_close").find(frame).center)
+    if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
+        raise JobAborted("lootbug popup did not close", dev.capture())
+
+
+class LootbugPopupInterrupt:
+    """Whenever the Lootbug popup (a gem shop) is open, close it via its X."""
+
+    def handle(self, dev, frame: np.ndarray) -> bool:
+        if screens.identify(frame) != LOOTBUG_POPUP:
+            return False
+        log.info("interrupt: closing lootbug popup")
+        try:
+            close_lootbug_popup(dev)
+        except JobAborted as e:
+            save_failure(e.frame, f"interrupt_{e}")
+            log.error("interrupt failed: %s", e)
+        return True
+
+
+class FounderJob:
+    """Press the falling Founder parachute crate; rewards are credited at once
+    (no popup). Verified by the crate disappearing."""
+
+    name = "founder"
+    MIN_GAP = 10
+
+    def __init__(self):
+        self.last_run = float("-inf")
+
+    def due(self, now: float, frame: np.ndarray) -> bool:
+        return now - self.last_run >= self.MIN_GAP and screens.founder_crate(frame) is not None
+
+    def run(self, dev) -> str:
+        self.last_run = time.monotonic()
+        frame = dev.capture()
+        if screens.identify(frame) != MINING:
+            raise JobAborted("not on mining screen", frame)
+        crate = screens.founder_crate(frame)
+        if crate is None:
+            return "none"
+        dev.press(*crate.center)
+        if wait_for(dev, lambda f: screens.founder_crate(f) is None, timeout=4) is None:
+            raise JobAborted("founder crate still there after press", dev.capture())
+        log.info("founder drop claimed")
+        return "claimed"

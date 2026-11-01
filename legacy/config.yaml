@@ -1,0 +1,164 @@
+# ---------------------------------------------------------------------------
+# Idle Obelisk Miner bot configuration
+#
+# Everything game-UI-specific lives here and in templates/*.png.
+# The Python code never hardcodes coordinates or button names, so when the
+# game's UI changes you should only ever need to edit this file + recapture
+# a template image, not touch bot/*.py.
+# ---------------------------------------------------------------------------
+
+adb:
+  # Serial as shown by `adb devices`. For Waydroid over TCP this looks like
+  # "192.168.240.112:5555". Leave null to let adb pick the only device.
+  serial: "192.168.240.112:5555"
+
+  # If set, the bot will run `adb connect <host>:<port>` at startup before
+  # doing anything else. Leave host null if you connect manually / adb is
+  # already paired.
+  connect_host: "192.168.240.112"
+  connect_port: 5555
+
+  # Android package name of Idle Obelisk Miner, only needed for the
+  # "restart_game" recovery action below. Find it with:
+  #   adb shell pm list packages | grep -i obelisk
+  package: "com.checkbox.minershminer"   # <-- replace with the real one
+
+capture:
+  interval_idle_seconds: 15     # polling interval when nothing matched (saves CPU)
+  interval_active_seconds: 2    # polling interval right after an action (react fast)
+
+matching:
+  default_threshold: 0.85       # 0.0-1.0, higher = stricter match
+  grayscale: true                # grayscale matching is faster and usually enough
+
+# ---------------------------------------------------------------------------
+# Humanization: adds randomness to tap position and timing so the bot
+# doesn't tap the exact same pixel on the exact same cadence every time.
+# Jitter is always clamped to stay inside the matched button, so it can
+# never cause a miss.
+# ---------------------------------------------------------------------------
+humanization:
+  enabled: true
+  tap_jitter_px: 6                 # max random offset (px) from a button's center
+  timing_jitter_fraction: 0.25     # +/-25% randomization applied to poll intervals
+  micro_pause_chance: 0.05         # 5% chance of an extra short pause after an action
+  micro_pause_range: [0.3, 1.2]    # seconds, used when a micro-pause triggers
+
+# ---------------------------------------------------------------------------
+# Web dashboard: status, live log stream, last screenshot, pause/resume,
+# and manual workflow triggers, viewable from a browser.
+#
+# host: "127.0.0.1" = only reachable from the Pi itself.
+#       "0.0.0.0"    = reachable from any device on your LAN (e.g. your
+#                       phone). If you do this, set `token` below too --
+#                       there is no login screen, and an unset token means
+#                       ANYONE on your network can pause the bot or fire
+#                       workflows.
+# ---------------------------------------------------------------------------
+dashboard:
+  enabled: true
+  host: "127.0.0.1"
+  port: 6001
+  token: null    # e.g. "some-long-random-string"; required as ?token=... if set
+
+# ---------------------------------------------------------------------------
+# Tasks are checked every cycle in priority order (highest first). The first
+# one that both (a) is off cooldown and (b) matches on screen gets run, and
+# then the loop restarts so the *new* state gets evaluated fresh next cycle.
+#
+# Capture your own template PNGs with:
+#   python3 scripts/capture_template.py --name collect_button
+# ---------------------------------------------------------------------------
+tasks:
+  - name: collect_gift_bug
+    template: gift_bug.png
+    action: tap
+    threshold: 0.90
+    priority: 100          # popups/dialogs block everything else, handle first
+    cooldown_seconds: 5
+
+  - name: close_gift_bug
+    template: gift_bug_close.png
+    action: tap
+    threshold: 0.90
+    priority: 90
+    cooldown_seconds: 6
+
+#  - name: collect_resources
+#    template: collect_button.png
+#    action: tap
+#    threshold: 0.87
+#    priority: 10
+#    cooldown_seconds: 5
+
+#  - name: claim_offline_earnings
+#    template: claim_button.png
+#    action: tap
+#    priority: 20
+#    cooldown_seconds: 30
+
+#  - name: watch_ad_bonus
+#    template: free_bonus_icon.png
+#    # set action to "tap" only if you actually want ads auto-watched;
+#    # "skip" just logs that it saw the icon and leaves it alone
+#    action: skip
+#    priority: 5
+#    cooldown_seconds: 60
+
+recovery:
+  # If no task has matched anything for this many consecutive cycles,
+  # the bot assumes it's stuck on an unrecognized screen.
+  max_unknown_cycles: 5
+  action: press_back        # "press_back" or "restart_game"
+
+# ---------------------------------------------------------------------------
+# Workflows: explicit multi-step sequences, distinct from the reactive
+# tasks above. Use these for anything that's a fixed recipe of several
+# taps rather than "whenever X appears, do Y" -- redeeming a code,
+# auto-prestige, navigating a menu to toggle a setting, etc.
+#
+# trigger: "manual"   -> only runs when triggered from the dashboard
+#                         (or bot.request_workflow("name") in code)
+# trigger: "interval" -> runs automatically every interval_seconds
+#
+# Step types (used in order):
+#   tap_template: <filename>   tap the center of a matched template
+#   type_text: "..."            send text (supports {code} substitution
+#                                 if you build a code-redeem workflow)
+#   wait: <seconds>
+#   press_back: true
+#   swipe: [x1, y1, x2, y2]
+# ---------------------------------------------------------------------------
+workflows:
+  
+  - name: claim_freebies
+    trigger: interval
+    interval_seconds: 2400
+    steps:
+       - tap_template: shop_button.png
+       - wait: 1
+       - tap_template: freebie_button.png
+       - tap_template: shop_button.png
+
+#  - name: redeem_code
+#    trigger: manual
+#    steps:
+#      - tap_template: menu_button.png
+#      - tap_template: settings_icon.png
+#      - tap_template: redeem_code_field.png
+#      - type_text: "PUTCODEHERE"   # edit this line each time, or trigger
+#                                     # scripts/redeem_code.py instead, which
+#                                     # takes the code as a CLI argument
+#      - tap_template: redeem_submit_button.png
+#      - wait: 1.5
+#      - tap_template: popup_close_x.png
+#
+#  - name: auto_prestige
+#    trigger: manual              # flip to "interval" once you trust it
+#    interval_seconds: 3600
+#    steps:
+#      - tap_template: menu_button.png
+#      - wait: 1
+#      - tap_template: prestige_button.png
+#      - wait: 1
+#      - tap_template: confirm_button.png

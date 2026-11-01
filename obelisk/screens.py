@@ -1,0 +1,195 @@
+"""Screen definitions: each screen is a set of anchors that must (not) match."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+import cv2
+import numpy as np
+
+from . import WIDTH, HEIGHT
+from .vision import ANCHOR_DIR, Anchor, Box, Match, clamp, green_fraction
+
+MINING, STORE, LOOTBUG_POPUP, UNKNOWN = "mining", "store", "lootbug_popup", "unknown"
+
+# Where the Store's "Freebie Pack" header may be (Store scroll position can vary).
+FREEBIE_BAND: Box = (150, 200, 340, 1090)
+# Claim button relative to the header's top-left: header (170,460) -> claim (521,495).
+CLAIM_OFFSET = (351, 35)
+CLAIM_SIZE = (81, 53)
+# Left HUD column where the "banked lootbugs" row can appear (rows shift as
+# timers come and go).
+LOOTBUG_COLUMN: Box = (0, 250, 60, 1000)
+# "All" icon sits ~50 px right of the row's bug icon.
+LOOTBUG_ALL_DX = (40, 80)
+
+# Banked lootbugs line up at fixed spots: first ~(242,647), then ~(332,648),
+# (422,648). Sprites (head+body, no wings) score 0.90-1.0; empty ~0.25.
+LOOTBUG_FIELD: Box = (150, 540, 520, 740)
+LOOTBUG_HOMES = {
+    "lootbug_red_1": (226, 612, 258, 682),
+    "lootbug_red_2": (226, 612, 258, 682),
+    "lootbug_red_3": (226, 612, 258, 682),
+    "lootbug_purple_1": (406, 615, 438, 682),
+    "lootbug_purple_2": (316, 615, 348, 682),
+}
+
+# Playfield area where the swaying/falling Founder parachute crate is searched.
+# Matched crates score 0.72-1.0; nothing else in any reference screen > 0.42.
+FOUNDER_AREA: Box = (60, 170, 680, 1090)
+
+# The Store icon's background fills with green from the bottom as freebies
+# bank up (4 of 42 rows at 3/19 banked, 13 rows at ~6/19). Measured on x=603.
+STORE_FILL_X = 603
+STORE_FILL_ROWS = (1102, 1144)   # interior, top..bottom (exclusive)
+
+
+class A:
+    """Lazily loaded anchors (so importing never needs the PNGs)."""
+
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get(name: str) -> Anchor:
+        spec = {
+            "anvil_button":   dict(home=(44, 1100, 94, 1148)),
+            "grid_button":    dict(home=(334, 1100, 386, 1148)),
+            "store_icon":     dict(home=(615, 1113, 644, 1122)),
+            "store_close":    dict(home=(403, 1100, 453, 1147)),
+            "loot_tables":    dict(home=(520, 172, 620, 203)),
+            "freebie_header": dict(home=(170, 460, 308, 486), search=FREEBIE_BAND),
+            "claim_ready":    dict(home=(521, 495, 602, 548), threshold=0.85),
+            "claim_empty":    dict(home=(521, 495, 602, 548), threshold=0.85),
+            "lootbug_icon":   dict(home=(11, 705, 28, 718), threshold=0.80, search=LOOTBUG_COLUMN),
+            "lootbug_all":    dict(home=(60, 705, 79, 718), threshold=0.75),
+            "lootbug_header": dict(home=(212, 202, 420, 232)),
+            "lootbug_close":  dict(home=(542, 222, 586, 266)),
+            **{n: dict(home=LOOTBUG_HOMES[n], threshold=0.75, search=LOOTBUG_FIELD)
+               for n in LOOTBUG_HOMES},
+            "founder_crate_1": dict(home=(334, 532, 418, 578), threshold=0.6, search=FOUNDER_AREA),
+            "founder_crate_2": dict(home=(325, 532, 409, 578), threshold=0.6, search=FOUNDER_AREA),
+            "founder_crate_3": dict(home=(321, 538, 405, 584), threshold=0.6, search=FOUNDER_AREA),
+        }[name]
+        return Anchor(name, **spec)
+
+
+def right_size(frame: np.ndarray) -> bool:
+    return frame.shape[:2] == (HEIGHT, WIDTH)
+
+
+def identify(frame: np.ndarray) -> str:
+    if not right_size(frame):
+        return UNKNOWN
+    if A.get("lootbug_header").find(frame) and A.get("lootbug_close").find(frame):
+        return LOOTBUG_POPUP
+    if A.get("store_close").find(frame) and A.get("loot_tables").find(frame):
+        return STORE
+    if (A.get("anvil_button").find(frame) and A.get("grid_button").find(frame)
+            and A.get("store_icon").find(frame) and not A.get("store_close").find(frame)):
+        return MINING
+    return UNKNOWN
+
+
+def store_fill(frame: np.ndarray) -> float:
+    """0..1: how far the Store icon's green 'banked freebies' gauge has risen."""
+    if not right_size(frame) or A.get("store_icon").find(frame) is None:
+        return 0.0
+    y1, y2 = STORE_FILL_ROWS
+    x = STORE_FILL_X
+    return green_fraction(frame, (x, y1, x + 1, y2))
+
+
+def store_badge(frame: np.ndarray) -> bool:
+    """True when at least one freebie seems to be banked (gauge >= 2 rows)."""
+    return store_fill(frame) >= 2 / 42
+
+
+def freebie_state(frame: np.ndarray) -> tuple[str, Optional[Match]]:
+    """('ready' | 'empty' | 'unknown', claim button match).
+
+    'ready' needs ALL of: Freebie header found, ready-Claim template at the
+    fixed offset from it, and the button area mostly green. Anything else is
+    never pressed.
+    """
+    if not right_size(frame):
+        return "unknown", None
+    header = A.get("freebie_header").find(frame)
+    if header is None:
+        return "unknown", None
+    x = header.box[0] + CLAIM_OFFSET[0]
+    y = header.box[1] + CLAIM_OFFSET[1]
+    box = (x, y, x + CLAIM_SIZE[0], y + CLAIM_SIZE[1])
+    search = (box[0] - 4, box[1] - 4, box[2] + 4, box[3] + 4)
+    ready = A.get("claim_ready").find(frame, search)
+    if ready and green_fraction(frame, ready.box) >= 0.5:
+        return "ready", ready
+    empty = A.get("claim_empty").find(frame, search)
+    if empty and green_fraction(frame, empty.box) < 0.05:
+        return "empty", empty
+    return "unknown", None
+
+
+WIKI_LOOTBUG_THRESHOLD = 0.70   # real bugs 0.88-0.93, bug-free frames <= 0.45
+
+
+@lru_cache(maxsize=None)
+def _wiki_lootbugs() -> tuple:
+    """(name, bgr, mask) for all 14 skins, from scripts/make_wiki_lootbugs.py."""
+    out = []
+    for path in sorted((ANCHOR_DIR / "lootbug_wiki").glob("*.png")):
+        t = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        out.append((path.stem, np.ascontiguousarray(t[..., :3]),
+                    np.ascontiguousarray((t[..., 3] > 0).astype(np.uint8))))
+    return tuple(out)
+
+
+def wiki_lootbug(frame: np.ndarray) -> Optional[Match]:
+    """Best match over all 14 wiki skins (masked), or None."""
+    x1, y1, x2, y2 = clamp(LOOTBUG_FIELD, frame)
+    region = frame[y1:y2, x1:x2]
+    best = None
+    for name, tpl, mask in _wiki_lootbugs():
+        res = cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED, mask=mask)
+        res = np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
+        _, score, _, (bx, by) = cv2.minMaxLoc(res)
+        if score >= WIKI_LOOTBUG_THRESHOLD and (best is None or score > best.score):
+            th, tw = tpl.shape[:2]
+            best = Match(f"wiki_{name}", (x1 + bx, y1 + by, x1 + bx + tw, y1 + by + th), float(score))
+    return best
+
+
+def lootbug_sprite(frame: np.ndarray) -> Optional[Match]:
+    """Best-matching lootbug on the field (the press target), or None.
+
+    Uses in-game crops (Default/red, Halloween/purple) plus masked templates of
+    all 14 skins from the wiki (regular + golden), so any equipped skin is found.
+    """
+    if not right_size(frame):
+        return None
+    hits = [m for n in LOOTBUG_HOMES if (m := A.get(n).find(frame))]
+    if hits:                       # fast path: in-game crops (~0.1 s)
+        return max(hits, key=lambda m: m.score)
+    return wiki_lootbug(frame)     # all 14 skins, masked (~1.3 s on the Pi)
+
+
+def lootbug_row(frame: np.ndarray) -> Optional[Match]:
+    """The HUD's banked-lootbugs row ("All" icon), or None. INFO ONLY: pressing
+    that icon does nothing (tested live 2026-11-01), and the row is sometimes
+    absent while a bug is on the field."""
+    if not right_size(frame):
+        return None
+    icon = A.get("lootbug_icon").find(frame)
+    if icon is None:
+        return None
+    x1, y1, _, y2 = icon.box
+    search = (x1 + LOOTBUG_ALL_DX[0], y1 - 3, x1 + LOOTBUG_ALL_DX[1], y2 + 3)
+    return A.get("lootbug_all").find(frame, search)
+
+
+def founder_crate(frame: np.ndarray) -> Optional[Match]:
+    """Best match of the Founder drop crate (3 sway poses), or None."""
+    if not right_size(frame):
+        return None
+    hits = [m for n in (1, 2, 3) if (m := A.get(f"founder_crate_{n}").find(frame))]
+    return max(hits, key=lambda m: m.score) if hits else None

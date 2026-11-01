@@ -1,0 +1,15 @@
+# Core bot (headless, runs fine as a systemd service with no display)
+opencv-python-headless>=4.9,<5
+numpy>=1.26,<2
+PyYAML>=6.0,<7
+
+# Web dashboard (only needed if dashboard.enabled: true in config.yaml)
+Flask>=3.0,<4
+
+# Only needed if you want to use scripts/capture_template.py, which opens
+# an interactive OpenCV window (cv2.selectROI) to let you crop new
+# templates. That requires GUI bindings, so on a machine where you'll run
+# that script, install this INSTEAD of opencv-python-headless above:
+#
+#   pip uninstall opencv-python-headless
+#   pip install opencv-python

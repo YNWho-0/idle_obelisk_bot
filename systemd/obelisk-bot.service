@@ -1,0 +1,34 @@
+# Idle Obelisk Miner bot v2, as a *user* service (no sudo; survives logout
+# and reboot because lingering is enabled for this user).
+#
+# Install / manage:
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-bot.service
+#   systemctl --user enable --now obelisk-bot
+#   systemctl --user status obelisk-bot
+#   journalctl --user -u obelisk-bot -f      (or: tail -f ~/idle_obelisk_bot/logs/obelisk.log)
+#   systemctl --user stop obelisk-bot        (e.g. while you play by hand)
+
+[Unit]
+Description=Idle Obelisk Miner bot v2 (freebies, lootbugs)
+After=network-online.target
+# Keep retrying forever while Waydroid isn't up yet (e.g. right after boot).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/idle_obelisk_bot
+Environment=PYTHONUNBUFFERED=1
+# Waydroid's adb endpoint; "-" = don't fail the start if it isn't reachable yet.
+ExecStartPre=-/usr/bin/adb connect 192.168.240.112:5555
+ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk run
+# Crashes (adb dropped, Waydroid not running, wrong resolution) -> retry in 60 s.
+Restart=on-failure
+RestartSec=60
+# Exit 3 = bot stopped itself after repeated job failures: stay stopped and
+# leave the evidence in logs/failures/ for a human.
+RestartPreventExitStatus=3
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

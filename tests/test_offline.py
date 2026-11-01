@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Offline tests against saved screenshots. No device needed.
+
+  venv/bin/python tests/test_offline.py
+"""
+
+from __future__ import annotations
+
+import sys
+import traceback
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from obelisk import screens                       # noqa: E402
+from obelisk.jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,  # noqa: E402
+                          LootbugPopupInterrupt)
+
+S = ROOT / "screens"
+
+
+def load(name: str) -> np.ndarray:
+    img = cv2.imread(str(S / name))
+    assert img is not None, name
+    return img
+
+
+MINING_READY = load("01_wm720x1280.png")
+MINING_READY2 = load("02b_after_tap.png")
+MINING_EMPTY = load("13_store_closed.png")
+MINING_CLEAN = load("40_mining_after_settings.png")   # after Options cleanup, gauge ~6/19
+STORE_READY = load("10_store_freebie_ready.png")
+STORE_TOAST = load("11_after_claim_popup.png")
+STORE_EMPTY = load("12_after_claim_settled.png")
+
+GEM_150 = (521, 615, 602, 668)     # "150 gems" Resource Pack button
+CLAIM = (521, 495, 602, 548)
+STORE_X = (403, 1100, 453, 1147)
+STORE_ICON = (596, 1098, 664, 1137)
+
+
+def inside(pt, box) -> bool:
+    return box[0] <= pt[0] < box[2] and box[1] <= pt[1] < box[3]
+
+
+class FakeDevice:
+    """Plays back screenshots. `script` maps the current frame name to a list of
+    (allowed press box, frames shown afterwards). Any other press fails."""
+
+    def __init__(self, start: str, frames: dict, script: dict):
+        self.frames, self.script = frames, script
+        self.queue = [start]
+        self.presses: list[tuple[str, tuple[int, int]]] = []
+
+    @property
+    def current(self) -> str:
+        return self.queue[0]
+
+    def capture(self) -> np.ndarray:
+        # show queued frames in order; the last one stays on screen
+        name = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
+        self._shown = name
+        return self.frames[name]
+
+    def press(self, x, y):
+        here = self._shown
+        for box, after in self.script.get(here, []):
+            if inside((x, y), box):
+                self.presses.append((here, (x, y)))
+                self.queue = list(after)
+                return
+        raise AssertionError(f"unexpected press at {(x, y)} on {here}")
+
+    def sleep(self, s):
+        pass
+
+
+BUG_POPUP = load("23_redbug_press.png")      # 3-row gem shop
+BUG_POPUP_BIG = load("21_bug_popup_1.png")   # 6-row gem shop + reward toasts
+NO_BUGS = load("24_after_redbug.png")
+FRAMES = {"mining": MINING_READY, "mining_empty": MINING_EMPTY, "store": STORE_READY,
+          "toast": STORE_TOAST, "store_empty": STORE_EMPTY, "mining_clean": MINING_CLEAN,
+          "bug_popup": BUG_POPUP, "bug_popup_big": BUG_POPUP_BIG, "no_bugs": NO_BUGS}
+FRAMES["founder"] = load("50_founder_2.png")
+FRAMES["founder_gone"] = load("51_founder_press_3.png")
+LOOTBUG_ALL = (55, 700, 85, 725)
+FRAMES["redbug"] = load("26_redbug_banked.png")
+BUG_SLOTS = (215, 600, 450, 700)
+CRATE = (315, 525, 425, 590)
+BUG_POPUP_X = (542, 222, 586, 266)
+
+
+# ---------------------------------------------------------------- detection
+
+def test_identify():
+    assert screens.identify(load("00_current.png")) == screens.UNKNOWN  # old 1024x732 layout
+    for img in (MINING_READY, MINING_READY2, MINING_EMPTY, MINING_CLEAN):
+        assert screens.identify(img) == screens.MINING
+    for name in ("30_grid_menu.png", "32_options_display.png"):
+        assert screens.identify(load(name)) == screens.UNKNOWN, name
+    for name in ("21_bug_popup_1.png", "21_bug_popup_3.png", "23_redbug_press.png"):
+        assert screens.identify(load(name)) == screens.LOOTBUG_POPUP, name
+    for img in (STORE_READY, STORE_TOAST, STORE_EMPTY):
+        assert screens.identify(img) == screens.STORE
+
+
+def test_badge():
+    assert screens.store_badge(MINING_READY) and screens.store_badge(MINING_READY2)
+    assert not screens.store_badge(MINING_EMPTY)
+    assert screens.store_badge(MINING_CLEAN)
+    assert screens.store_fill(MINING_READY) < screens.store_fill(MINING_CLEAN)
+
+
+def test_freebie_states():
+    assert screens.freebie_state(STORE_READY)[0] == "ready"
+    assert screens.freebie_state(STORE_TOAST)[0] == "unknown"
+    assert screens.freebie_state(STORE_EMPTY)[0] == "empty"
+
+
+def test_gem_button_in_claim_slot_is_never_ready():
+    img = STORE_READY.copy()
+    x1, y1, x2, y2 = GEM_150
+    img[CLAIM[1]:CLAIM[3], CLAIM[0]:CLAIM[2]] = STORE_READY[y1:y2, x1:x2]
+    assert screens.freebie_state(img)[0] == "unknown"
+
+
+def test_missing_header_is_never_ready():
+    img = STORE_READY.copy()
+    img[455:490, 165:315] = STORE_READY[574:609, 165:315]   # "Resource Pack" header
+    assert screens.freebie_state(img)[0] == "unknown"
+
+
+def test_scrolled_store_follows_header():
+    img = STORE_READY.copy()
+    img[210:1010] = STORE_READY[290:1090]   # content scrolled up 80 px
+    state, m = screens.freebie_state(img)
+    assert state == "ready" and m.center == (561, 441), (state, m)
+
+
+def test_claim_button_does_not_match_maxed_or_gem_buttons():
+    """Best ready-Claim score anywhere in the button column must be the real one."""
+    tpl = screens.A.get("claim_ready")
+    for (y1, y2) in [(270, 345), (600, 680), (720, 800), (840, 920), (960, 1040)]:
+        m = tpl.score(STORE_READY, (500, y1, 620, y2))
+        assert m.score < 0.6, (y1, m.score)
+
+
+def test_lootbug_row():
+    for img in (MINING_READY, MINING_READY2, MINING_EMPTY, MINING_CLEAN, load("20_giftbug_3.png")):
+        row = screens.lootbug_row(img)
+        assert row is not None and inside(row.center, LOOTBUG_ALL), row
+    for img in (NO_BUGS, STORE_READY, BUG_POPUP, load("30_grid_menu.png")):
+        assert screens.lootbug_row(img) is None
+
+
+def test_founder_crate():
+    for n in (1, 2, 3):
+        m = screens.founder_crate(load(f"50_founder_{n}.png"))
+        assert m is not None and inside(m.center, CRATE), (n, m)
+    for img in (MINING_READY, MINING_CLEAN, NO_BUGS, STORE_READY, BUG_POPUP,
+                load("51_founder_press_1.png"), load("51_founder_press_3.png")):
+        assert screens.founder_crate(img) is None
+
+
+def test_lootbug_sprite():
+    for name in ("01_wm720x1280.png", "20_giftbug_1.png", "20_giftbug_3.png",
+                 "25_after_notification_press.png", "26_redbug_banked.png", "50_founder_3.png"):
+        m = screens.lootbug_sprite(load(name))
+        assert m is not None and inside(m.center, BUG_SLOTS), (name, m)
+    for img in (NO_BUGS, STORE_READY, BUG_POPUP):
+        assert screens.lootbug_sprite(img) is None
+
+
+def test_wiki_skins_find_real_bugs():
+    """The 14 wiki-derived templates alone must find both real skins and
+    nothing on bug-free frames."""
+    for name, skin in (("26_redbug_banked.png", "default"), ("50_founder_2.png", "default"),
+                       ("20_giftbug_1.png", "halloween"), ("13_store_closed.png", "halloween")):
+        m = screens.wiki_lootbug(load(name))
+        assert m is not None and m.name.endswith(skin) and inside(m.center, BUG_SLOTS), (name, m)
+    for name in ("24_after_redbug.png", "22_bug_popup_closed.png", "40_mining_after_settings.png"):
+        assert screens.wiki_lootbug(load(name)) is None, name
+
+
+# ---------------------------------------------------------------- job flow
+
+def test_founder_job_claims():
+    dev = FakeDevice("founder", FRAMES, {"founder": [(CRATE, ["founder_gone"])]})
+    assert FounderJob().run(dev) == "claimed" and len(dev.presses) == 1
+
+
+def test_founder_job_aborts_if_crate_stays():
+    dev = FakeDevice("founder", FRAMES, {"founder": [(CRATE, ["founder"])]})
+    try:
+        FounderJob().run(dev)
+    except JobAborted as e:
+        assert "still there" in str(e)
+    else:
+        raise AssertionError("expected abort")
+
+
+def test_lootbug_job_loots_and_closes():
+    for popup in ("bug_popup", "bug_popup_big"):
+        dev = FakeDevice("redbug", FRAMES, {
+            "redbug": [(BUG_SLOTS, [popup])],
+            popup: [(BUG_POPUP_X, ["no_bugs"])],
+        })
+        assert LootbugJob().run(dev) == "looted"
+        assert [p[0] for p in dev.presses] == ["redbug", popup], dev.presses
+
+
+def test_lootbug_job_aborts_if_popup_never_opens():
+    dev = FakeDevice("redbug", FRAMES, {"redbug": [(BUG_SLOTS, ["redbug"])]})
+    try:
+        LootbugJob().run(dev)
+    except JobAborted as e:
+        assert "did not open" in str(e) and len(dev.presses) == 1
+    else:
+        raise AssertionError("expected abort")
+
+
+def test_popup_interrupt_only_presses_x():
+    dev = FakeDevice("bug_popup_big", FRAMES, {"bug_popup_big": [(BUG_POPUP_X, ["no_bugs"])]})
+    assert LootbugPopupInterrupt().handle(dev, BUG_POPUP_BIG)
+    assert len(dev.presses) == 1
+    dev2 = FakeDevice("mining_clean", FRAMES, {})
+    assert not LootbugPopupInterrupt().handle(dev2, MINING_CLEAN) and not dev2.presses
+
+
+def test_job_claims_and_closes():
+    dev = FakeDevice("mining", FRAMES, {
+        "mining": [(STORE_ICON, ["store"])],
+        "store": [(CLAIM, ["toast", "toast", "store_empty"]), (STORE_X, ["mining_empty"])],
+        "store_empty": [(STORE_X, ["mining_empty"])],
+    })
+    assert FreebieJob().run(dev) == "claimed"
+    assert [p[0] for p in dev.presses] == ["mining", "store", "store_empty"], dev.presses
+
+
+def test_job_nothing_banked():
+    dev = FakeDevice("mining_empty", FRAMES, {
+        "mining_empty": [(STORE_ICON, ["store_empty"])],
+        "store_empty": [(STORE_X, ["mining_empty"])],
+    })
+    assert FreebieJob().run(dev) == "nothing"
+    assert len(dev.presses) == 2
+
+
+def test_job_unverified_claim_aborts_and_closes():
+    dev = FakeDevice("mining", FRAMES, {
+        "mining": [(STORE_ICON, ["store"])],
+        "store": [(CLAIM, ["store"]), (STORE_X, ["mining_empty"])],
+    })
+    # the claim press "does nothing": frames keep showing a ready button
+    try:
+        FreebieJob().run(dev)
+    except JobAborted as e:
+        assert "not verified" in str(e)
+        assert dev.presses[-1][1] == (428, 1123), dev.presses   # closed via X
+    else:
+        raise AssertionError("expected abort")
+
+
+def test_job_refuses_off_mining_screen():
+    dev = FakeDevice("store", FRAMES, {})
+    try:
+        FreebieJob().run(dev)
+    except JobAborted as e:
+        assert "not on mining" in str(e) and not dev.presses
+    else:
+        raise AssertionError("expected abort")
+
+
+if __name__ == "__main__":
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS {name}")
+        except Exception:
+            failed += 1
+            print(f"FAIL {name}")
+            traceback.print_exc()
+    print(f"\n{len(tests) - failed}/{len(tests)} passed")
+    sys.exit(1 if failed else 0)
