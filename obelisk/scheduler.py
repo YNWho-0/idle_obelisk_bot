@@ -79,6 +79,28 @@ class Scheduler:
                 job.last_check = float("-inf")
         self.ensure_game_in_front(planned=True)
         self.last_foreground_check = time.monotonic()
+        if not self.settle():
+            log.warning("session: mining screen not stable after %d s; continuing", self.SETTLE_TIMEOUT)
+
+    SETTLE_TIMEOUT = 60
+
+    def settle(self) -> bool:
+        """After the game returns it shows stale and then fresh "Offline Gains"
+        popups and ignores the first presses; handle popups until the mining
+        screen is seen 3 times in a row, before any job may run."""
+        self.dev.sleep(3)
+        deadline = time.monotonic() + self.SETTLE_TIMEOUT
+        stable = 0
+        while time.monotonic() < deadline:
+            frame = self.dev.capture()
+            if any(h.handle(self.dev, frame) for h in self.interrupts):
+                stable = 0
+                continue
+            stable = stable + 1 if screens.identify(frame) == screens.MINING else 0
+            if stable >= 3:
+                return True
+            self.dev.sleep(1.5)
+        return False
 
     def session_complete(self, now: float) -> bool:
         p = self.planner
