@@ -317,6 +317,9 @@ def test_read_gems():
     for name, value in expect.items():
         assert read_gems(load(name)) == value, (name, read_gems(load(name)))
     assert read_gems(load("00_current.png")) is None      # old layout
+    dimmed = np.zeros((1280, 720, 3), np.uint8)             # counter dimmed by an overlay
+    dimmed[126:148, 466:568] = load("67_gems_dimmed_6580_crop.png")
+    assert read_gems(dimmed) == 6580
 
 
 def test_founder_window_learns_hourly_phase():

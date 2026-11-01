@@ -34,7 +34,11 @@ MIN_MARGIN = 0.9
 def glyphs(frame: np.ndarray) -> list[np.ndarray]:
     """Boolean ink masks of the counter's glyphs, left to right."""
     x1, y1, x2, y2 = GEM_BOX
-    white = frame[y1:y2, x1:x2].min(axis=2) > 150
+    # Otsu threshold: the counter is sometimes dimmed by an overlay (grey
+    # digits); a fixed cut-off at 150 lost parts of them
+    gray = cv2.cvtColor(np.ascontiguousarray(frame[y1:y2, x1:x2]), cv2.COLOR_BGR2GRAY)
+    t, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    white = gray > max(t, 90)
     cols = white.any(axis=0)
     out, start = [], None
     for x, c in enumerate(list(cols) + [False]):
