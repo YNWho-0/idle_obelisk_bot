@@ -77,6 +77,9 @@ def main() -> None:
                     help="resolve a conflict in favour of this device: next session uploads it")
     cg.add_argument("--conflict", metavar="REASON", help="mark a conflict by hand")
     nt = sub.add_parser("notify-test", help="send a test alert to the phone")
+    db = sub.add_parser("dashboard", help="read-only phone dashboard (Flask)")
+    db.add_argument("--host", default="0.0.0.0")
+    db.add_argument("--port", type=int)
     sm = sub.add_parser("summary", help="daily summary from the logs")
     g = sm.add_mutually_exclusive_group()
     g.add_argument("--date", help="YYYY-MM-DD (default: today)")
@@ -84,10 +87,17 @@ def main() -> None:
     sm.add_argument("--write", action="store_true", help="also save to logs/daily/<date>.txt")
     args = ap.parse_args()
 
+    if args.cmd == "dashboard":
+        from .dashboard import serve
+        serve(args.host, args.port)
+        return
     if args.cmd == "notify-test":
         from .notify import alert, topic
+        latest = Path(__file__).resolve().parent.parent / "logs" / "latest.jpg"
         ok = alert("test", "Obelisk bot: test alert",
-                   "If you see this on your phone, alerts work.", tags="white_check_mark", force=True)
+                   "If you see this (and a screenshot), alerts work. Tap to open the dashboard.",
+                   tags="white_check_mark", force=True,
+                   image=latest if latest.exists() else None)
         print("sent" if ok else "NOT sent", "to topic", topic())
         return
     if args.cmd == "cloud":

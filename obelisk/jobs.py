@@ -40,14 +40,15 @@ def wait_for(dev, pred: Callable[[np.ndarray], object], timeout: float,
         dev.sleep(interval)
 
 
-def save_failure(frame: Optional[np.ndarray], reason: str) -> None:
+def save_failure(frame: Optional[np.ndarray], reason: str) -> Optional[Path]:
     if frame is None:
-        return
+        return None
     FAIL_DIR.mkdir(parents=True, exist_ok=True)
     slug = "".join(c if c.isalnum() else "_" for c in reason)[:40]
     path = FAIL_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}_{slug}.png"
     cv2.imwrite(str(path), frame)
     log.warning("saved failure screenshot %s", path)
+    return path
 
 
 class FreebieJob:
@@ -372,13 +373,13 @@ class CloudSync:
 
     def _conflict(self, frame, why: str) -> str:
         if not self.state.get("cloud_conflict"):
-            save_failure(frame, "cloud_conflict")
+            shot = save_failure(frame, "cloud_conflict")
             from .notify import alert
             alert("cloud_conflict", "Obelisk bot: cloud save conflict",
                   f"{why}. The bot is paused (no playing/uploading) until you decide: "
                   "keep the Pi's save with 'python -m obelisk cloud --keep-pi', or "
                   "play longer on the phone and upload, then ask for a download.",
-                  priority="high", tags="warning,cloud", state=self.state)
+                  priority="high", tags="warning,cloud", state=self.state, image=shot)
         self.state.set("cloud_conflict", why)
         log.warning("cloud: CONFLICT (%s). Not playing or uploading until resolved: "
                     "python -m obelisk cloud --keep-pi  (or make the other device's save "

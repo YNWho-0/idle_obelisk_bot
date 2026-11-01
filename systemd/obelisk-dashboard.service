@@ -1,0 +1,19 @@
+# Read-only phone dashboard for the Idle Obelisk bot (port 8765; token in
+# ~/idle_obelisk_bot/dashboard.conf). It never touches the device or game.
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-dashboard.service
+#   systemctl --user enable --now obelisk-dashboard
+[Unit]
+Description=Idle Obelisk bot dashboard (read-only, port 8765)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/idle_obelisk_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk dashboard
+Restart=on-failure
+RestartSec=30
+Nice=15
+
+[Install]
+WantedBy=default.target

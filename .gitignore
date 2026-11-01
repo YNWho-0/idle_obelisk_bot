@@ -7,3 +7,4 @@ screens/settings/
 # overwritten by `python -m obelisk peek`
 screens/live_peek.png
 notify.conf
+dashboard.conf
