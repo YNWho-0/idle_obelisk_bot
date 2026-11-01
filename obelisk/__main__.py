@@ -72,7 +72,10 @@ def main() -> None:
 
     setup_logging()
     dev = Device(dry_run=getattr(args, "dry_run", False))
-    dev.check_resolution()
+    if args.cmd == "run":
+        dev.ensure_resolution()      # re-applies wm size if Waydroid lost it
+    else:
+        dev.check_resolution()
     if args.cmd in ("freebie", "lootbug", "founder"):
         job = {"freebie": FreebieJob, "lootbug": LootbugJob, "founder": FounderJob}[args.cmd]()
         try:

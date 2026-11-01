@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from obelisk import screens                       # noqa: E402
+from obelisk.scheduler import Scheduler          # noqa: E402
 from obelisk.jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,  # noqa: E402
                           LootbugPopupInterrupt)
 
@@ -273,6 +274,47 @@ def test_job_refuses_off_mining_screen():
         assert "not on mining" in str(e) and not dev.presses
     else:
         raise AssertionError("expected abort")
+
+
+# ---------------------------------------------------------------- scheduler
+
+class FakeGameDevice(FakeDevice):
+    def __init__(self, *a, in_front=True, after_launch=("mining_clean",), **kw):
+        super().__init__(*a, **kw)
+        self.in_front, self.after_launch, self.launches = in_front, after_launch, 0
+
+    def game_in_front(self):
+        return self.in_front
+
+    def launch_game(self):
+        self.launches += 1
+        self.in_front = True
+        self.queue = list(self.after_launch)
+
+
+def test_scheduler_relaunches_game_when_not_in_front():
+    dev = FakeGameDevice("store", FRAMES, {}, in_front=False)
+    sched = Scheduler(dev, [], poll=0)
+    sched.tick()
+    assert dev.launches == 1 and not dev.presses
+
+
+def test_scheduler_runs_first_due_job_from_mining():
+    dev = FakeGameDevice("redbug", FRAMES, {
+        "redbug": [(BUG_SLOTS, ["bug_popup"])],
+        "bug_popup": [(BUG_POPUP_X, ["no_bugs"])],
+    })
+    sched = Scheduler(dev, [FounderJob(), LootbugJob()], poll=0)
+    sched.tick()
+    assert [p[0] for p in dev.presses] == ["redbug", "bug_popup"], dev.presses
+
+
+def test_scheduler_never_presses_off_mining_screen():
+    dev = FakeGameDevice("store", FRAMES, {})
+    sched = Scheduler(dev, [FounderJob(), LootbugJob(), FreebieJob()], poll=0)
+    for _ in range(3):
+        sched.tick()
+    assert not dev.presses and sched.unknown == 3
 
 
 if __name__ == "__main__":

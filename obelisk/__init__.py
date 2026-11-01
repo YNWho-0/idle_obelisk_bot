@@ -8,3 +8,4 @@ waiting for the expected next screen.
 
 WIDTH, HEIGHT = 720, 1280
 PACKAGE = "com.checkbox.minershminer"
+ACTIVITY = ".RunnerActivity"

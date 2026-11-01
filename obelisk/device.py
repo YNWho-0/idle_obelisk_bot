@@ -16,7 +16,7 @@ import time
 import cv2
 import numpy as np
 
-from . import WIDTH, HEIGHT
+from . import ACTIVITY, HEIGHT, PACKAGE, WIDTH
 
 log = logging.getLogger("obelisk.device")
 
@@ -71,6 +71,34 @@ class Device:
             raise DeviceError(
                 f"screen is {img.shape[1]}x{img.shape[0]}, expected {WIDTH}x{HEIGHT}; "
                 f"run: adb -s {self.serial} shell wm size {WIDTH}x{HEIGHT}")
+
+    def ensure_resolution(self) -> None:
+        """Re-apply the 720x1280 override if it was lost (e.g. Waydroid restart)."""
+        img = self.capture()
+        if img.shape[:2] == (HEIGHT, WIDTH):
+            return
+        log.warning("screen is %dx%d; re-applying wm size %dx%d",
+                    img.shape[1], img.shape[0], WIDTH, HEIGHT)
+        if not self.dry_run:
+            self._adb("shell", "wm", "size", f"{WIDTH}x{HEIGHT}")
+        time.sleep(3)
+        self.check_resolution()
+
+    # ---- game lifecycle ----------------------------------------------------
+
+    def game_in_front(self) -> bool:
+        out = self._adb("shell", "dumpsys", "activity", "activities").decode(errors="replace")
+        for line in out.splitlines():
+            if "topResumedActivity" in line or "mResumedActivity" in line:
+                return f"{PACKAGE}/" in line
+        return False
+
+    def launch_game(self) -> None:
+        if self.dry_run:
+            log.info("DRY RUN launch %s", PACKAGE)
+            return
+        log.info("launching %s", PACKAGE)
+        self._adb("shell", "am", "start", "-n", f"{PACKAGE}/{ACTIVITY}")
 
     @staticmethod
     def sleep(seconds: float) -> None:
