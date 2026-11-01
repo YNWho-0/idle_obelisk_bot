@@ -20,20 +20,15 @@ sys.path.insert(0, str(ROOT))
 from obelisk.gems import GEM_BOX, glyphs  # noqa: E402
 
 OUT = ROOT / "obelisk" / "anchors" / "gem_digits"
-KNOWN = {
-    "01_wm720x1280.png": "3852", "10_store_freebie_ready.png": "3852",
-    "13_store_closed.png": "3882", "20_giftbug_1.png": "3882",
-    "21_bug_popup_3.png": "3884", "40_mining_after_settings.png": "3884",
-    "24_after_redbug.png": "3974", "25_after_notification_press.png": "3974",
-    "50_founder_1.png": "3994",
-    "51_founder_press_3.png": "4014", "26_redbug_banked.png": "4014",
-    "60_stats.png": "4057", "63_stickers.png": "4057",
-    "65_gems_4110.png": "4110",   # thin-stroke rendering of 1 and 0
-    "66_gems_6294.png": "6294",   # first 6
-    "67_gems_dimmed_6580_crop.png": "6580",   # *_crop.png = counter crop only
-    "68_gems_6642_crop.png": "6642",
-    "68_gems_6632_crop.png": "6632",
-    "68_gems_6602_crop.png": "6602",
+KNOWN = {   # layout v2 screenshots with gem counts read by eye
+    "n10_mining_bugs_crate_1.png": "632",
+    "n10_mining_bugs_crate_3.png": "632",
+    "n21_lootbug_popup_settled.png": "638",
+    "n32_founder_after.png": "658",
+    "n42_store_freebie_ready.png": "658",
+    "n50_grid_menu.png": "768",
+    "n60_resume_5.png": "768",
+    "n80_gems_802_crop.png": "802",     # *_crop.png = GEM_BOX crop only
 }
 
 

@@ -8,19 +8,17 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from obelisk.playtime import CLOUD_ROW, LOCAL_ROW, SAMPLE_DIR, glyphs  # noqa: E402
 
 # screenshot -> (cloud text, local text), spaces removed
-KNOWN = {
-    "80_cloud.png": ("05d15h17m30s", "05d16h00m56s"),
-    "82_upload_1.png": ("05d15h17m30s", "05d16h02m25s"),
-    "84_upload_3.png": ("05d15h17m30s", "05d16h02m35s"),
-    "85_upload_confirm_1.png": ("05d15h17m30s", "05d16h03m04s"),
-    "87_upload_confirm_3.png": ("05d16h03m04s", "05d16h03m19s"),
-    "90_cloud_newer.png": ("05d16h05m58s", "05d16h06m24s"),
+KNOWN = {   # layout v2
+    "n51_cloud.png": ("05d16h20m45s", "05d16h24m07s"),
+    "n54_uploaded.png": ("05d16h25m41s", "05d16h25m52s"),
+    "n81_cloudtime_05d16h33m01s_crop.png": ("05d16h33m01s", None),   # CLOUD_ROW crop only
 }
 
 
@@ -31,7 +29,14 @@ def main() -> None:
     counts: dict[str, int] = {}
     for name, texts in KNOWN.items():
         img = cv2.imread(str(ROOT / "screens" / name))
+        if name.endswith("_crop.png"):              # a CLOUD_ROW crop: put it in a blank frame
+            frame = np.zeros((1280, 720, 3), np.uint8)
+            x1, y1, x2, y2 = CLOUD_ROW
+            frame[y1:y2, x1:x2] = img
+            img = frame
         for row, text in zip((CLOUD_ROW, LOCAL_ROW), texts):
+            if text is None:
+                continue
             gl = glyphs(img, row)
             if len(gl) != len(text):
                 raise SystemExit(f"{name}: {len(gl)} glyphs for {text!r}")

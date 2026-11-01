@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from . import screens
-from .screens import (A, CLOUD, CLOUD_DOWNLOAD, CLOUD_TIME, CLOUD_UPLOAD, GRID_MENU,
+from .screens import (A, CLOUD, CLOUD_AUTOSAVE, CLOUD_DOWNLOAD, CLOUD_TIME, CLOUD_UPLOAD, GRID_MENU,
                       LOOTBUG_POPUP, MINING, OFFLINE_OPTIONS, OFFLINE_RESULTS, STORE)
 
 log = logging.getLogger("obelisk.jobs")
@@ -360,8 +360,21 @@ class CloudSync:
                     "longer and download it)", why)
         return "conflict"
 
+    def _autosave_off(self, dev, frame):
+        """Loading a save restores its settings, incl. Cloud Auto-Save = on;
+        uploads must only come from this bot's checked path."""
+        if not screens.cloud_autosave_on(frame):
+            return frame
+        log.warning("cloud: in-game Cloud Auto-Save was ON again; turning it off")
+        dev.press(*_center(CLOUD_AUTOSAVE))
+        off = wait_for(dev, lambda f: not screens.cloud_autosave_on(f), timeout=3)
+        if off is None:
+            raise JobAborted("cloud: could not turn Cloud Auto-Save off", dev.capture())
+        return off
+
     def _decide(self, dev, frame, upload: bool) -> str:
         from .playtime import CLOUD_ROW, read_seconds
+        frame = self._autosave_off(dev, frame)
         if screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled":
             return self._conflict(frame, "cloud save has more play time than this device's")
         if self.state.get("cloud_conflict"):
@@ -387,13 +400,18 @@ class CloudSync:
         if screens.cloud_button(armed, CLOUD_DOWNLOAD) != "disabled":
             raise JobAborted("cloud: Download became active; not uploading", armed)
         dev.press(*_center(CLOUD_UPLOAD))
-        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before)
-                        and read_seconds(f, CLOUD_ROW) is not None, timeout=12)
+        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before), timeout=12)
         if done is None:
-            raise JobAborted("cloud: upload not verified (cloud time unchanged/unreadable)", dev.capture())
-        new_t = read_seconds(done, CLOUD_ROW)
+            raise JobAborted("cloud: upload not verified (cloud time unchanged)", dev.capture())
+        dev.sleep(0.5)
+        new_t = read_seconds(dev.capture(), CLOUD_ROW)
         self.state.set("cloud_last_upload", new_t)
-        log.info("cloud: uploaded (cloud play time now %ds)", new_t)
+        if new_t is None:
+            log.warning("cloud: uploaded, but couldn't read the new cloud play time; "
+                        "next session can't compare (no conflict check that once)")
+            save_failure(done, "cloud_time_unreadable_after_upload")
+        else:
+            log.info("cloud: uploaded (cloud play time now %ds)", new_t)
         return "uploaded"
 
     @staticmethod

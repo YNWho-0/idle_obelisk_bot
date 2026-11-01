@@ -16,36 +16,30 @@ MINING, STORE, LOOTBUG_POPUP, UNKNOWN = "mining", "store", "lootbug_popup", "unk
 OFFLINE_OPTIONS, OFFLINE_RESULTS = "offline_options", "offline_results"
 GRID_MENU, CLOUD = "grid_menu", "cloud"
 
-# Where the Store's "Freebie Pack" header may be (Store scroll position can vary).
-FREEBIE_BAND: Box = (150, 200, 340, 1090)
-# Claim button relative to the header's top-left: header (170,460) -> claim (521,495).
-CLAIM_OFFSET = (351, 35)
-CLAIM_SIZE = (81, 53)
-# Left HUD column where the "banked lootbugs" row can appear (rows shift as
-# timers come and go).
-LOOTBUG_COLUMN: Box = (0, 250, 60, 1000)
-# "All" icon sits ~50 px right of the row's bug icon.
-LOOTBUG_ALL_DX = (40, 80)
+# LAYOUT v2: the game's native 720x1280 layout (no black bars) used since the
+# 2026-11-01 save reload. v1 values are in git history / screens/v1layout.
 
-# Banked lootbugs line up at fixed spots: first ~(242,647), then ~(332,648),
-# (422,648). Sprites (head+body, no wings) score 0.90-1.0; empty ~0.25.
-LOOTBUG_FIELD: Box = (150, 540, 520, 740)
+# Where the Store's "Freebie Pack" header may be (Store scroll position varies:
+# it has opened both at the top and at the Resource Packs).
+FREEBIE_BAND: Box = (100, 130, 360, 1170)
+# Claim button relative to the header's top-left: header (137,624) -> claim (550,665).
+CLAIM_OFFSET = (413, 41)
+CLAIM_SIZE = (94, 61)
+
+# Banked lootbugs line up at fixed spots (~(285,645), (393,645), (500,655)).
+LOOTBUG_FIELD: Box = (180, 560, 600, 760)
 LOOTBUG_HOMES = {
-    "lootbug_red_1": (226, 612, 258, 682),
-    "lootbug_red_2": (226, 612, 258, 682),
-    "lootbug_red_3": (226, 612, 258, 682),
-    "lootbug_purple_1": (406, 615, 438, 682),
-    "lootbug_purple_2": (316, 615, 348, 682),
+    "lootbug_red_1": (377, 605, 409, 690),
 }
 
 # Playfield area where the swaying/falling Founder parachute crate is searched.
-# Matched crates score 0.72-1.0; nothing else in any reference screen > 0.42.
-FOUNDER_AREA: Box = (60, 170, 680, 1090)
+# Crates score 0.61-1.0 on reference frames; frames without a crate <= 0.33.
+FOUNDER_AREA: Box = (40, 90, 690, 1170)
 
 # The Store icon's background fills with green from the bottom as freebies
-# bank up (4 of 42 rows at 3/19 banked, 13 rows at ~6/19). Measured on x=603.
-STORE_FILL_X = 603
-STORE_FILL_ROWS = (1102, 1144)   # interior, top..bottom (exclusive)
+# bank up (14 of 49 rows at 7/19 banked). Measured on x=586.
+STORE_FILL_X = 586
+STORE_FILL_ROWS = (1184, 1233)   # interior, top..bottom (exclusive)
 
 
 class A:
@@ -55,29 +49,27 @@ class A:
     @lru_cache(maxsize=None)
     def get(name: str) -> Anchor:
         spec = {
-            "anvil_button":   dict(home=(44, 1100, 94, 1148)),
-            "grid_button":    dict(home=(334, 1100, 386, 1148)),
-            "store_icon":     dict(home=(615, 1113, 644, 1122)),
-            "store_close":    dict(home=(403, 1100, 453, 1147)),
-            "loot_tables":    dict(home=(520, 172, 620, 203)),
-            "freebie_header": dict(home=(170, 460, 308, 486), search=FREEBIE_BAND),
-            "claim_ready":    dict(home=(521, 495, 602, 548), threshold=0.85),
-            "claim_empty":    dict(home=(521, 495, 602, 548), threshold=0.85),
-            "lootbug_icon":   dict(home=(11, 705, 28, 718), threshold=0.80, search=LOOTBUG_COLUMN),
-            "lootbug_all":    dict(home=(60, 705, 79, 718), threshold=0.75),
-            "lootbug_header": dict(home=(212, 202, 420, 232)),
-            "lootbug_close":  dict(home=(542, 222, 586, 266)),
+            "anvil_button":   dict(home=(58, 1188, 106, 1234)),
+            "grid_button":    dict(home=(338, 1188, 386, 1234)),
+            "store_icon":     dict(home=(598, 1195, 634, 1205)),
+            "store_close":    dict(home=(414, 1188, 466, 1234)),
+            "loot_tables":    dict(home=(553, 89, 663, 124)),
+            "freebie_header": dict(home=(137, 624, 297, 651), search=FREEBIE_BAND),
+            "claim_ready":    dict(home=(550, 665, 644, 726), threshold=0.85),
+            "claim_empty":    dict(home=(550, 665, 644, 726), threshold=0.85),
+            "lootbug_header": dict(home=(186, 121, 445, 160)),
+            "lootbug_close":  dict(home=(575, 148, 625, 197)),
             **{n: dict(home=LOOTBUG_HOMES[n], threshold=0.75, search=LOOTBUG_FIELD)
                for n in LOOTBUG_HOMES},
-            "offline_options_label": dict(home=(236, 694, 486, 744)),
-            "offline_confirm":       dict(home=(120, 1089, 600, 1128)),
-            "offline_results_label": dict(home=(282, 103, 440, 126)),
-            "offline_close":         dict(home=(120, 1089, 600, 1128)),
-            "grid_cloud_button": dict(home=(165, 884, 221, 940)),
-            "cloud_title":       dict(home=(206, 375, 436, 399)),
-            "founder_crate_1": dict(home=(334, 532, 418, 578), threshold=0.6, search=FOUNDER_AREA),
-            "founder_crate_2": dict(home=(325, 532, 409, 578), threshold=0.6, search=FOUNDER_AREA),
-            "founder_crate_3": dict(home=(321, 538, 405, 584), threshold=0.6, search=FOUNDER_AREA),
+            "offline_options_label": dict(home=(214, 704, 506, 763)),
+            "offline_confirm":       dict(home=(74, 1168, 646, 1218)),
+            "offline_results_label": dict(home=(284, 10, 436, 31)),
+            "offline_close":         dict(home=(74, 1168, 646, 1218)),
+            "grid_cloud_button": dict(home=(194, 927, 260, 993)),
+            "cloud_title":       dict(home=(178, 329, 450, 356)),
+            "founder_crate_1": dict(home=(432, 582, 530, 632), threshold=0.6, search=FOUNDER_AREA),
+            "founder_crate_2": dict(home=(435, 590, 533, 640), threshold=0.6, search=FOUNDER_AREA),
+            "founder_crate_3": dict(home=(448, 590, 546, 640), threshold=0.6, search=FOUNDER_AREA),
         }[name]
         return Anchor(name, **spec)
 
@@ -146,7 +138,7 @@ def freebie_state(frame: np.ndarray) -> tuple[str, Optional[Match]]:
     return "unknown", None
 
 
-WIKI_LOOTBUG_THRESHOLD = 0.70   # real bugs 0.88-0.93, bug-free frames <= 0.45
+WIKI_LOOTBUG_THRESHOLD = 0.70   # see tests: real bugs vs bug-free frames
 
 
 @lru_cache(maxsize=None)
@@ -189,20 +181,6 @@ def lootbug_sprite(frame: np.ndarray) -> Optional[Match]:
     return wiki_lootbug(frame)     # all 14 skins, masked (~1.3 s on the Pi)
 
 
-def lootbug_row(frame: np.ndarray) -> Optional[Match]:
-    """The HUD's banked-lootbugs row ("All" icon), or None. INFO ONLY: pressing
-    that icon does nothing (tested live 2026-11-01), and the row is sometimes
-    absent while a bug is on the field."""
-    if not right_size(frame):
-        return None
-    icon = A.get("lootbug_icon").find(frame)
-    if icon is None:
-        return None
-    x1, y1, _, y2 = icon.box
-    search = (x1 + LOOTBUG_ALL_DX[0], y1 - 3, x1 + LOOTBUG_ALL_DX[1], y2 + 3)
-    return A.get("lootbug_all").find(frame, search)
-
-
 def founder_crate(frame: np.ndarray) -> Optional[Match]:
     """Best match of the Founder drop crate (3 sway poses), or None."""
     if not right_size(frame):
@@ -214,6 +192,8 @@ def founder_crate(frame: np.ndarray) -> Optional[Match]:
 # Left-side notification toast ("Elixir Drone is now Grade 1!" etc.): a flat
 # dark box (BGR 24,20,16) reaching x~200, where the playfield normally is.
 # HUD timer rows use the same fill but stop at x~95, so x 100-195 is checked.
+# NOTE: measured in layout v1; no v2 sample yet, so NotificationInterrupt is
+# not used until it is re-measured (an open item bag would look similar).
 NOTIF_FILL = np.array([24, 20, 16])
 NOTIF_STRIP = (100, 196)
 NOTIF_ROWS = (250, 1090)
@@ -241,9 +221,16 @@ def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
 
 # Cloud screen buttons. Measured HSV means: disabled V~42; enabled red H~174
 # V~168; armed (after the 1st Upload press) orange H~13 V~223.
-CLOUD_DOWNLOAD: Box = (452, 437, 562, 485)
-CLOUD_UPLOAD: Box = (452, 652, 562, 700)
-CLOUD_TIME: Box = (186, 420, 402, 446)       # cloud save play time text
+CLOUD_DOWNLOAD: Box = (470, 402, 598, 455)
+CLOUD_UPLOAD: Box = (470, 655, 598, 708)
+CLOUD_TIME: Box = (165, 384, 350, 406)       # cloud save play time text
+CLOUD_AUTOSAVE: Box = (168, 815, 204, 851)   # "Toggle Cloud Auto-Save" checkbox
+
+
+def cloud_autosave_on(frame: np.ndarray) -> bool:
+    """The auto-save checkbox shows a white tick when on (326 white px vs 0)."""
+    x1, y1, x2, y2 = CLOUD_AUTOSAVE
+    return int((frame[y1:y2, x1:x2].min(axis=2) > 200).sum()) > 60
 
 
 def cloud_button(frame: np.ndarray, box: Box) -> str:

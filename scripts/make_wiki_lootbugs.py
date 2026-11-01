@@ -5,7 +5,7 @@ Source: reference/wiki/lootbug_skins_screenshot.png (a phone screenshot of
 the Idle Obelisk Miner wiki's "Regular / Golden Lootbugs" section, 1170x2532).
 Each sprite is cut out of the dark wiki background (that becomes the alpha
 mask), cropped to its central columns (wings flap on the sides), and scaled
-to in-game size. Scale 0.37 was measured by matching the wiki Default and
+to in-game size. Scale 0.44 (layout v2; 0.37 in v1) was measured by matching the wiki Default and
 Halloween sprites against real bugs in screens/26_* and screens/20_*.
 
   venv/bin/python -I scripts/make_wiki_lootbugs.py
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "reference" / "wiki" / "lootbug_skins_screenshot.png"
 OUT = ROOT / "obelisk" / "anchors" / "lootbug_wiki"
 
-SCALE = 0.37
+SCALE = 0.44            # layout v2 (was 0.37 in layout v1)
 BODY_FRACTION = 0.42           # keep the central 42% of columns
 BG = np.array([33, 32, 33])    # wiki page background (BGR)
 NAMES = ["default", "valentines", "easter", "magma", "summer", "halloween", "christmas"]

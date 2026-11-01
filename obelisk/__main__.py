@@ -138,7 +138,7 @@ def main() -> None:
         logging.getLogger("obelisk").info(
             "mode: %s", "always open" if planner is None else "hourly sessions, game in background between")
         Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
-                  interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt(), NotificationInterrupt()],
+                  interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt()],   # NotificationInterrupt: v1 only
                   poll=3.0, planner=planner,
                   cloud=None if planner is None else CloudSync()).run_forever()
 

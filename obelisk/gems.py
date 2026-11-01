@@ -21,8 +21,8 @@ MAX_UNREAD_FILES = 50
 
 log = logging.getLogger("obelisk.gems")
 
-GEM_BOX = (466, 126, 568, 148)    # x1, y1, x2, y2: digits end at x~558, gem icon after
-GLYPH_H, PAD_W = 13, 9
+GEM_BOX = (430, 35, 536, 57)      # layout v2: digits end x~533, gem icon from x~540
+GLYPH_H, PAD_W = 15, 10
 # Glyph distance = Hausdorff (max distance from any ink pixel to the other
 # glyph's nearest ink). Stroke width varies 1-2 px with sub-pixel position, so
 # pixel XOR confused 0 with 8; Hausdorff doesn't (a missing bar costs >= 1.9).

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Cut anchor templates out of the saved reference screenshots.
+"""Cut anchor templates out of the reference screenshots (layout v2).
 
-Every anchor is (name, source screenshot, box). Re-run after recapturing a
-reference screen:  venv/bin/python scripts/make_anchors.py
-Boxes are x1, y1, x2, y2 in the fixed 720x1280 layout.
+Layout v2 = the game's native 720x1280 layout (no black bars), which it uses
+after any reload since 2026-11-01 ~13:15. The old letterboxed layout's
+screenshots and anchors are in screens/v1layout/ and legacy/anchors_v1/.
+
+Every anchor is (name, source screenshot, box x1, y1, x2, y2). Re-run after
+recapturing a reference screen:  venv/bin/python -I scripts/make_anchors.py
 """
 
 from pathlib import Path
@@ -15,42 +18,34 @@ SCREENS = ROOT / "screens"
 OUT = ROOT / "obelisk" / "anchors"
 
 ANCHORS = [
-    # bottom bar (present on mining screen and in the Store)
-    ("anvil_button",   "13_store_closed.png",        (44, 1100, 94, 1148)),
-    ("grid_button",    "13_store_closed.png",        (334, 1100, 386, 1148)),
-    # Store icon awning only: the icon background fills with green as freebies bank up
-    ("store_icon",     "13_store_closed.png",        (615, 1113, 644, 1122)),
-    # Store screen
-    ("store_close",    "10_store_freebie_ready.png", (403, 1100, 453, 1147)),
-    ("loot_tables",    "10_store_freebie_ready.png", (520, 172, 620, 203)),
-    ("freebie_header", "10_store_freebie_ready.png", (170, 460, 308, 486)),
-    ("claim_ready",    "10_store_freebie_ready.png", (521, 495, 602, 548)),
-    ("claim_empty",    "12_after_claim_settled.png", (521, 495, 602, 548)),
-    # Left HUD column: "banked lootbugs" row = [bug icon] N [bug icon "All"]
-    ("lootbug_icon",   "01_wm720x1280.png",            (11, 705, 28, 718)),
-    ("lootbug_all",    "01_wm720x1280.png",            (60, 705, 79, 718)),
+    # bottom bar (mining screen; also visible under the Store/grid menu)
+    ("anvil_button",   "n10_mining_bugs_crate_1.png", (58, 1188, 106, 1234)),
+    ("grid_button",    "n10_mining_bugs_crate_1.png", (338, 1188, 386, 1234)),
+    # Store icon awning only: the icon background fills green as freebies bank up
+    ("store_icon",     "n45_store_closed.png",        (598, 1195, 634, 1205)),
+    # Store screen (its close X is also the grid menu's)
+    ("store_close",    "n42_store_freebie_ready.png", (414, 1188, 466, 1234)),
+    ("loot_tables",    "n42_store_freebie_ready.png", (553, 89, 663, 124)),
+    ("freebie_header", "n42_store_freebie_ready.png", (137, 624, 297, 651)),
+    ("claim_ready",    "n42_store_freebie_ready.png", (550, 665, 644, 726)),
+    ("claim_empty",    "n44_freebie_claimed.png",     (550, 665, 644, 726)),
     # Lootbug popup (a GEM SHOP below the header; only ever press its top-right X)
-    ("lootbug_header", "23_redbug_press.png",          (212, 202, 420, 232)),
-    ("lootbug_close",  "23_redbug_press.png",          (542, 222, 586, 266)),
-    # Lootbug sprites on the field (head + body, no flapping wings)
-    ("lootbug_red_1",    "26_redbug_banked.png",           (226, 612, 258, 682)),
-    ("lootbug_red_2",    "25_after_notification_press.png", (226, 612, 258, 682)),
-    ("lootbug_red_3",    "50_founder_1.png",               (226, 612, 258, 682)),
-    ("lootbug_purple_1", "20_giftbug_3.png",               (406, 615, 438, 682)),
-    ("lootbug_purple_2", "20_giftbug_3.png",               (316, 615, 348, 682)),
-    # Offline Gains popups shown when the game returns from the background:
-    # 1) options + Confirm (never touch the checkboxes), 2) results + Close
-    ("offline_options_label", "73_buffs_after_5min.png",       (236, 694, 486, 744)),
-    ("offline_confirm",       "73_buffs_after_5min.png",       (120, 1089, 600, 1128)),
-    ("offline_results_label", "74_after_offline_confirm.png",  (282, 103, 440, 126)),
-    ("offline_close",         "74_after_offline_confirm.png",  (120, 1089, 600, 1128)),
-    # Grid menu -> Cloud screen (save sync)
-    ("grid_cloud_button", "30_grid_menu.png",          (165, 884, 221, 940)),
-    ("cloud_title",       "81_cloud_before_upload.png", (206, 375, 436, 399)),
-    # Founder drop: lower half of the parachute crate (ribbon + glowing gem)
-    ("founder_crate_1", "50_founder_1.png",            (334, 532, 418, 578)),
-    ("founder_crate_2", "50_founder_2.png",            (325, 532, 409, 578)),
-    ("founder_crate_3", "50_founder_3.png",            (321, 538, 405, 584)),
+    ("lootbug_header", "n21_lootbug_popup_settled.png", (186, 121, 445, 160)),
+    ("lootbug_close",  "n21_lootbug_popup_settled.png", (575, 148, 625, 197)),
+    # Lootbug sprite on the field (head + body, no flapping wings)
+    ("lootbug_red_1",  "n10_mining_bugs_crate_1.png", (377, 605, 409, 690)),
+    # Offline Gains popups after the game returns from the background
+    ("offline_options_label", "n73_resume5min_2.png",  (214, 704, 506, 763)),
+    ("offline_confirm",       "n73_resume5min_2.png",  (74, 1168, 646, 1218)),
+    ("offline_results_label", "n74_offline_results.png", (284, 10, 436, 31)),
+    ("offline_close",         "n74_offline_results.png", (74, 1168, 646, 1218)),
+    # Grid menu -> Cloud screen
+    ("grid_cloud_button", "n50_grid_menu.png", (194, 927, 260, 993)),
+    ("cloud_title",       "n51_cloud.png",     (178, 329, 450, 356)),
+    # Founder drop: lower half of the parachute crate (3 sway poses)
+    ("founder_crate_1", "n10_mining_bugs_crate_1.png", (432, 582, 530, 632)),
+    ("founder_crate_2", "n30_founder_before.png",      (435, 590, 533, 640)),
+    ("founder_crate_3", "n10_mining_bugs_crate_2.png", (448, 590, 546, 640)),
 ]
 
 
@@ -61,7 +56,7 @@ def main() -> None:
         if img is None:
             raise SystemExit(f"missing reference screenshot {SCREENS / src}")
         cv2.imwrite(str(OUT / f"{name}.png"), img[y1:y2, x1:x2])
-        print(f"{name:15s} {x2 - x1:3d}x{y2 - y1:<3d} from {src}")
+        print(f"{name:22s} {x2 - x1:3d}x{y2 - y1:<3d} from {src}")
 
 
 if __name__ == "__main__":

@@ -17,11 +17,12 @@ import numpy as np
 from .gems import MAX_DIST, MIN_MARGIN
 from .vision import ANCHOR_DIR
 
-CLOUD_ROW = (194, 422, 362, 442)    # x1, y1, x2, y2
-LOCAL_ROW = (194, 637, 362, 657)
+CLOUD_ROW = (162, 384, 356, 406)    # x1, y1, x2, y2 (layout v2)
+LOCAL_ROW = (162, 637, 356, 659)
 CANVAS_W = 10
 SAMPLE_DIR = ANCHOR_DIR / "playtime_glyphs"
 RE_TIME = re.compile(r"^(\d+)d(\d+)h(\d+)m(\d+)s$")
+UNREAD_DIR = ANCHOR_DIR.parent.parent / "logs" / "playtime_unread"
 
 
 def glyphs(frame: np.ndarray, row) -> list[np.ndarray]:
@@ -78,6 +79,7 @@ def read_text(frame: np.ndarray, row) -> Optional[str]:
             best[ch] = min(best.get(ch, 99.0), _dist(g, s))
         ranked = sorted(best.items(), key=lambda kv: kv[1])
         if len(ranked) < 2 or ranked[0][1] > MAX_DIST or ranked[1][1] - ranked[0][1] < MIN_MARGIN:
+            _save_unread(frame, row)
             return None
         chars.append(ranked[0][0])
     return "".join(chars) or None
@@ -93,3 +95,15 @@ def read_seconds(frame: np.ndarray, row) -> Optional[int]:
     if h > 23 or mi > 59 or s > 59:
         return None
     return ((d * 24 + h) * 60 + mi) * 60 + s
+
+
+def _save_unread(frame: np.ndarray, row) -> None:
+    try:
+        UNREAD_DIR.mkdir(parents=True, exist_ok=True)
+        if len(list(UNREAD_DIR.glob("*.png"))) >= 50:
+            return
+        x1, y1, x2, y2 = row
+        crop = frame[y1:y2, x1:x2]
+        cv2.imwrite(str(UNREAD_DIR / f"{abs(hash(crop.tobytes())) % 10**10}.png"), crop)
+    except OSError:
+        pass
