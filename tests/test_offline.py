@@ -302,7 +302,8 @@ def test_read_gems():
     from obelisk.gems import read_gems
     expect = {"01_wm720x1280.png": 3852, "13_store_closed.png": 3882, "22_bug_popup_closed.png": 3884,
               "33_opt_menus_2.png": 3884, "24_after_redbug.png": 3974, "50_founder_3.png": 3994,
-              "51_founder_press_1.png": 4014, "64_skins_scrolled.png": 4057}
+              "51_founder_press_1.png": 4014, "64_skins_scrolled.png": 4057,
+              "65_gems_4110.png": 4110}
     for name, value in expect.items():
         assert read_gems(load(name)) == value, (name, read_gems(load(name)))
     assert read_gems(load("00_current.png")) is None      # old layout

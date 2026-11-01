@@ -20,8 +20,12 @@ log = logging.getLogger("obelisk.gems")
 
 GEM_BOX = (466, 126, 568, 148)    # x1, y1, x2, y2: digits end at x~558, gem icon after
 GLYPH_H, PAD_W = 13, 9
-MAX_DIST = 8                      # best match must differ by <= 8 px
-MIN_MARGIN = 2                    # ... and beat the best other digit by >= 2 px
+# Glyph distance = Hausdorff (max distance from any ink pixel to the other
+# glyph's nearest ink). Stroke width varies 1-2 px with sub-pixel position, so
+# pixel XOR confused 0 with 8; Hausdorff doesn't (a missing bar costs >= 1.9).
+# Distances come in steps of ~0.96: same digit <= 0.96, different >= 1.91.
+MAX_DIST = 1.0
+MIN_MARGIN = 0.9
 
 
 def glyphs(frame: np.ndarray) -> list[np.ndarray]:
@@ -42,17 +46,26 @@ def glyphs(frame: np.ndarray) -> list[np.ndarray]:
     return out
 
 
-def _pad(g: np.ndarray) -> np.ndarray:
-    out = np.zeros((GLYPH_H, PAD_W), bool)
+def _canvas(g: np.ndarray) -> np.ndarray:
+    out = np.zeros((GLYPH_H, PAD_W), np.uint8)
     h, w = min(g.shape[0], GLYPH_H), min(g.shape[1], PAD_W)
-    out[:h, :w] = g[:h, :w]
+    off = (PAD_W - w) // 2
+    out[:h, off:off + w] = g[:h, :w]
     return out
 
 
-def _dist(a: np.ndarray, b: np.ndarray) -> int:
-    pa, pb = _pad(a), _pad(b)
-    return min(int((pa != np.roll(pb, s, axis=1)).sum()) for s in (-1, 0, 1)) \
-        + 2 * abs(a.shape[1] - b.shape[1])
+def _dist(a: np.ndarray, b: np.ndarray) -> float:
+    """Symmetric Hausdorff distance, best over -1/0/+1 px horizontal shifts."""
+    A = _canvas(a)
+    dA = cv2.distanceTransform(1 - A, cv2.DIST_L2, 3)
+    best = 99.0
+    for s in (-1, 0, 1):
+        B = np.roll(_canvas(b), s, axis=1)
+        if not A.any() or not B.any():
+            continue
+        dB = cv2.distanceTransform(1 - B, cv2.DIST_L2, 3)
+        best = min(best, float(max(dB[A > 0].max(), dA[B > 0].max())))
+    return best
 
 
 @lru_cache(maxsize=None)
@@ -69,10 +82,9 @@ def read_gems(frame: np.ndarray) -> Optional[int]:
         return None
     digits = []
     for g in gl:
-        best: dict[str, int] = {}
+        best: dict[str, float] = {}
         for ch, s in _samples():
-            d = _dist(g, s)
-            best[ch] = min(best.get(ch, 999), d)
+            best[ch] = min(best.get(ch, 99.0), _dist(g, s))
         ranked = sorted(best.items(), key=lambda kv: kv[1])
         if len(ranked) < 2 or ranked[0][1] > MAX_DIST or ranked[1][1] - ranked[0][1] < MIN_MARGIN:
             return None
