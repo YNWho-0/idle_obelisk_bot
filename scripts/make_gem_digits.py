@@ -31,6 +31,9 @@ KNOWN = {   # layout v2 screenshots with gem counts read by eye
     "n80_gems_802_crop.png": "802",     # *_crop.png = GEM_BOX crop only
     "n83_gems_928_crop.png": "928",
     "n85_gems_1083_crop.png": "1083",
+    "n94_gems_1362_dim_crop.png": "1362",   # dimmed by Android's ANR dialog
+    "n94_gems_1366_dim_crop.png": "1366",
+    "n94_gems_1476_crop.png": "1476",       # first 4
 }
 
 
