@@ -373,6 +373,12 @@ class CloudSync:
     def _conflict(self, frame, why: str) -> str:
         if not self.state.get("cloud_conflict"):
             save_failure(frame, "cloud_conflict")
+            from .notify import alert
+            alert("cloud_conflict", "Obelisk bot: cloud save conflict",
+                  f"{why}. The bot is paused (no playing/uploading) until you decide: "
+                  "keep the Pi's save with 'python -m obelisk cloud --keep-pi', or "
+                  "play longer on the phone and upload, then ask for a download.",
+                  priority="high", tags="warning,cloud", state=self.state)
         self.state.set("cloud_conflict", why)
         log.warning("cloud: CONFLICT (%s). Not playing or uploading until resolved: "
                     "python -m obelisk cloud --keep-pi  (or make the other device's save "

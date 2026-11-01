@@ -75,6 +75,7 @@ def main() -> None:
     cg.add_argument("--keep-pi", action="store_true",
                     help="resolve a conflict in favour of this device: next session uploads it")
     cg.add_argument("--conflict", metavar="REASON", help="mark a conflict by hand")
+    nt = sub.add_parser("notify-test", help="send a test alert to the phone")
     sm = sub.add_parser("summary", help="daily summary from the logs")
     g = sm.add_mutually_exclusive_group()
     g.add_argument("--date", help="YYYY-MM-DD (default: today)")
@@ -82,6 +83,12 @@ def main() -> None:
     sm.add_argument("--write", action="store_true", help="also save to logs/daily/<date>.txt")
     args = ap.parse_args()
 
+    if args.cmd == "notify-test":
+        from .notify import alert, topic
+        ok = alert("test", "Obelisk bot: test alert",
+                   "If you see this on your phone, alerts work.", tags="white_check_mark", force=True)
+        print("sent" if ok else "NOT sent", "to topic", topic())
+        return
     if args.cmd == "cloud":
         from .jobs import State
         st = State()
@@ -106,6 +113,11 @@ def main() -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text)
             print(f"(saved {out})")
+            from .notify import alert
+            needs_look = "NEEDS A LOOK" in text
+            alert(f"daily_{day}", f"Obelisk bot {day}: {'NEEDS A LOOK' if needs_look else 'OK'}",
+                  text[:3500], priority="default" if needs_look else "low",
+                  tags="warning" if needs_look else "bar_chart")
         return
 
     if args.cmd == "identify":
@@ -120,7 +132,14 @@ def main() -> None:
     setup_logging()
     dev = Device(dry_run=getattr(args, "dry_run", False))
     if args.cmd == "run":
-        dev.ensure_resolution()      # re-applies wm size if Waydroid lost it
+        try:
+            dev.ensure_resolution()  # re-applies wm size if Waydroid lost it
+        except Exception as e:
+            from .notify import alert
+            alert("crash", "Obelisk bot can't start (systemd retries every 60 s)",
+                  f"{type(e).__name__}: {e}. Often Waydroid/adb not running.",
+                  priority="high", tags="warning")
+            raise
     else:
         dev.check_resolution()
     if args.cmd in ("freebie", "lootbug", "founder"):
@@ -137,10 +156,17 @@ def main() -> None:
         planner = None if args.always_open else SessionPlanner(founder)
         logging.getLogger("obelisk").info(
             "mode: %s", "always open" if planner is None else "a short session every 50 min, game in background between")
-        Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
-                  interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt()],   # NotificationInterrupt: v1 only
-                  poll=3.0, planner=planner,
-                  cloud=None if planner is None else CloudSync()).run_forever()
+        try:
+            Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
+                      interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt()],   # NotificationInterrupt: v1 only
+                      poll=3.0, planner=planner,
+                      cloud=None if planner is None else CloudSync()).run_forever()
+        except Exception as e:
+            from .notify import alert
+            alert("crash", "Obelisk bot crashed (systemd retries every 60 s)",
+                  f"{type(e).__name__}: {e}. Often Waydroid/adb not running.",
+                  priority="high", tags="warning")
+            raise
 
 
 if __name__ == "__main__":

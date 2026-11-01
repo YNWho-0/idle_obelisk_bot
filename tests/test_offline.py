@@ -34,6 +34,8 @@ _jobs.FAIL_DIR = _TMP / "failures"
 _gems.UNREAD_DIR = _TMP / "gem_unread"
 _pt.UNREAD_DIR = _TMP / "playtime_unread"
 _jobs.State.PATH = _TMP / "state.json"
+import obelisk.notify as _notify                  # noqa: E402
+_notify.CONF = _TMP / "no-notify.conf"            # tests must never send real alerts
 
 S = ROOT / "screens"
 
@@ -355,6 +357,19 @@ def test_planner_every_50_minutes_and_never_waits():
     p.start(); assert p.founder_done(clock[0])             # nothing to wait for
     clock[0] += 30; assert p.finish() == 30
     assert p.next_start == 1_000_000.0 + 50 * 60
+
+
+def test_alerts_are_deduplicated_and_never_raise():
+    sent = []
+    st = _jobs.State(_TMP / "alerts.json")
+    send = lambda *a: sent.append(a)
+    assert _notify.alert("k", "t", "m", state=st, sender=send)
+    assert not _notify.alert("k", "t", "m", state=st, sender=send)       # within 6 h
+    assert _notify.alert("k", "t", "m", state=st, sender=send, force=True)
+    def boom(*a):
+        raise OSError("network down")
+    assert not _notify.alert("other", "t", "m", state=st, sender=boom)   # logged, no raise
+    assert len(sent) == 2
 
 
 def test_scheduler_never_presses_off_mining_screen():

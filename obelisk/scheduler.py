@@ -15,6 +15,7 @@ import time
 
 from . import screens
 from .gems import stable_gems
+from .notify import alert
 from .jobs import JobAborted, save_failure, wait_for
 
 # Exit code for "stopped on purpose after repeated job failures"; the
@@ -108,6 +109,11 @@ class Scheduler:
         p = self.planner
         if p.timed_out(now):
             log.warning("session hit the %d s limit", p.MAX_SESSION)
+            save_failure(self.last_frame, "session_timeout")
+            alert("session_timeout", "Obelisk bot: a session couldn't finish",
+                  f"Stopped after {p.MAX_SESSION // 60} min on screen '{self.last_screen}'. "
+                  "Possibly a new popup or a game update; screenshot in logs/failures/.",
+                  tags="hourglass")
             return True
         if self.last_screen != screens.MINING or not p.founder_done(now):
             return False
@@ -130,6 +136,9 @@ class Scheduler:
             save_failure(e.frame, f"cloud_{what}_{e}")
             if self.failures >= self.max_failures:
                 log.critical("too many job failures; stopping (exit %d)", EXIT_TOO_MANY_FAILURES)
+                alert("stopped_failures", "Obelisk bot STOPPED: repeated failures",
+                      f"Last: cloud {what}: {e}. Screenshots in logs/failures/.",
+                      priority="urgent", tags="rotating_light", force=True)
                 raise SystemExit(EXIT_TOO_MANY_FAILURES)
             return None
 
@@ -160,6 +169,10 @@ class Scheduler:
                 log.warning("off the mining screen for %d polls (%s); waiting, not pressing",
                             self.unknown, screen)
                 save_failure(frame, f"stuck_{screen}")
+                alert("stuck_screen", "Obelisk bot: stuck on an unknown screen",
+                      f"Not on the mining screen for {self.unknown} polls ({screen}). "
+                      "It waits and presses nothing; screenshot in logs/failures/.",
+                      tags="question")
             self.dev.sleep(self.poll)
             return
         self.unknown = 0
@@ -181,6 +194,10 @@ class Scheduler:
             save_failure(e.frame, f"{job.name}_{e}")
             if self.failures >= self.max_failures:
                 log.critical("too many job failures; stopping (exit %d)", EXIT_TOO_MANY_FAILURES)
+                alert("stopped_failures", "Obelisk bot STOPPED: repeated job failures",
+                      f"Last: {job.name}: {e}. Screenshots in logs/failures/. "
+                      "Restart with: systemctl --user start obelisk-bot",
+                      priority="urgent", tags="rotating_light", force=True)
                 raise SystemExit(EXIT_TOO_MANY_FAILURES)
         finally:
             self.check_gems(job, before)
@@ -195,6 +212,10 @@ class Scheduler:
             log.critical("GEM GUARD: gems went %d -> %d during job %s; stopping (exit %d)",
                          before, after, job.name, EXIT_TOO_MANY_FAILURES)
             save_failure(self.dev.capture(), f"GEM_GUARD_{job.name}_{before}_to_{after}")
+            alert("gem_guard", "Obelisk bot STOPPED: gems dropped",
+                  f"Gems went {before} -> {after} during job '{job.name}'. The bot stopped "
+                  "itself; check the game and logs/failures/ before restarting.",
+                  priority="urgent", tags="rotating_light,gem", force=True)
             raise SystemExit(EXIT_TOO_MANY_FAILURES)
         log.info("gem guard: %d -> %d ok", before, after)
 
