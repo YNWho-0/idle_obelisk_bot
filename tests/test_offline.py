@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 from obelisk import screens                       # noqa: E402
 from obelisk.scheduler import Scheduler          # noqa: E402
 from obelisk.jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,  # noqa: E402
-                          LootbugPopupInterrupt)
+                          LootbugPopupInterrupt, NotificationInterrupt)
 
 S = ROOT / "screens"
 
@@ -274,6 +274,28 @@ def test_job_refuses_off_mining_screen():
         assert "not on mining" in str(e) and not dev.presses
     else:
         raise AssertionError("expected abort")
+
+
+def test_notification_box():
+    for name in ("40_mining_after_settings.png", "20_giftbug_1.png", "24_after_redbug.png",
+                 "22_bug_popup_closed.png"):
+        box = screens.notification_box(load(name))
+        assert box is not None and 615 <= box[0] <= 630 and 695 <= box[1] <= 710, (name, box)
+    for name in ("25_after_notification_press.png", "13_store_closed.png", "01_wm720x1280.png",
+                 "51_founder_press_1.png", "50_founder_2.png", "10_store_freebie_ready.png"):
+        assert screens.notification_box(load(name)) is None, name
+
+
+def test_notification_interrupt_dismisses_once():
+    FRAMES["notif"] = load("24_after_redbug.png")
+    FRAMES["no_notif"] = load("25_after_notification_press.png")
+    NOTIF = (0, 615, 205, 710)
+    dev = FakeDevice("notif", FRAMES, {"notif": [(NOTIF, ["no_notif"])]})
+    intr = NotificationInterrupt()
+    frame = dev.capture()                                  # the scheduler captures first
+    assert intr.handle(dev, frame) and len(dev.presses) == 1
+    assert not intr.handle(dev, FRAMES["notif"])          # rate-limited
+    assert not NotificationInterrupt().handle(dev, FRAMES["no_notif"])
 
 
 # ---------------------------------------------------------------- scheduler

@@ -20,7 +20,7 @@ import cv2
 from . import screens
 from .device import Device
 from .jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,
-                   LootbugPopupInterrupt, save_failure)
+                   LootbugPopupInterrupt, NotificationInterrupt, save_failure)
 from .scheduler import Scheduler
 
 LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "obelisk.log"
@@ -86,7 +86,7 @@ def main() -> None:
     else:
         # priority order: the founder crate can vanish; lootbugs/freebies bank up
         Scheduler(dev, [FounderJob(), LootbugJob(), FreebieJob()],
-                  interrupts=[LootbugPopupInterrupt()], poll=3.0).run_forever()
+                  interrupts=[LootbugPopupInterrupt(), NotificationInterrupt()], poll=3.0).run_forever()
 
 
 if __name__ == "__main__":

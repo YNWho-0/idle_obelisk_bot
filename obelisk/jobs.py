@@ -202,3 +202,31 @@ class FounderJob:
             raise JobAborted("founder crate still there after press", dev.capture())
         log.info("founder drop claimed")
         return "claimed"
+
+
+class NotificationInterrupt:
+    """Dismiss left-side notification toasts (they can hide the first lootbug
+    spot) by pressing them; verified by the box disappearing. Backs off for
+    10 min if a press doesn't dismiss it."""
+
+    MIN_GAP = 60
+    BACKOFF = 600
+
+    def __init__(self):
+        self.next_ok = float("-inf")
+
+    def handle(self, dev, frame: np.ndarray) -> bool:
+        now = time.monotonic()
+        if now < self.next_ok or screens.identify(frame) != MINING:
+            return False
+        box = screens.notification_box(frame)
+        if box is None:
+            return False
+        self.next_ok = now + self.MIN_GAP
+        y = (box[0] + box[1]) // 2
+        log.info("interrupt: dismissing notification at y %d-%d", *box)
+        dev.press(100, y)
+        if wait_for(dev, lambda f: screens.notification_box(f) is None, timeout=3) is None:
+            log.warning("notification still shown after press; backing off %d s", self.BACKOFF)
+            self.next_ok = now + self.BACKOFF
+        return True
