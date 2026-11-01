@@ -13,10 +13,11 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from obelisk.gems import glyphs  # noqa: E402
+from obelisk.gems import GEM_BOX, glyphs  # noqa: E402
 
 OUT = ROOT / "obelisk" / "anchors" / "gem_digits"
 KNOWN = {
@@ -29,6 +30,10 @@ KNOWN = {
     "60_stats.png": "4057", "63_stickers.png": "4057",
     "65_gems_4110.png": "4110",   # thin-stroke rendering of 1 and 0
     "66_gems_6294.png": "6294",   # first 6
+    "67_gems_dimmed_6580_crop.png": "6580",   # *_crop.png = counter crop only
+    "68_gems_6642_crop.png": "6642",
+    "68_gems_6632_crop.png": "6632",
+    "68_gems_6602_crop.png": "6602",
 }
 
 
@@ -38,7 +43,13 @@ def main() -> None:
         old.unlink()
     counts: dict[str, int] = {}
     for name, value in KNOWN.items():
-        gl = glyphs(cv2.imread(str(ROOT / "screens" / name)))
+        img = cv2.imread(str(ROOT / "screens" / name))
+        if name.endswith("_crop.png"):              # a GEM_BOX crop: put it in a blank frame
+            frame = np.zeros((1280, 720, 3), np.uint8)
+            x1, y1, x2, y2 = GEM_BOX
+            frame[y1:y2, x1:x2] = img
+            img = frame
+        gl = glyphs(img)
         if len(gl) != len(value):
             raise SystemExit(f"{name}: found {len(gl)} glyphs for {value!r}")
         for ch, g in zip(value, gl):

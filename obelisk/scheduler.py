@@ -29,7 +29,7 @@ class Scheduler:
     LAUNCH_WAIT = 90           # seconds to wait for the mining screen after a relaunch
 
     def __init__(self, dev, jobs, interrupts=(), poll: float = 2.0,
-                 max_unknown: int = 15, max_failures: int = 3, planner=None):
+                 max_unknown: int = 15, max_failures: int = 3, planner=None, cloud=None):
         self.dev = dev
         self.jobs = list(jobs)
         self.interrupts = list(interrupts)
@@ -43,6 +43,7 @@ class Scheduler:
         self.last_frame = None
         self.last_screen = None
         self.session_t0 = None          # monotonic start of the current session
+        self.cloud = cloud              # CloudSync, or None
 
     def run_forever(self) -> None:
         while True:
@@ -81,6 +82,10 @@ class Scheduler:
         self.last_foreground_check = time.monotonic()
         if not self.settle():
             log.warning("session: mining screen not stable after %d s; continuing", self.SETTLE_TIMEOUT)
+        if self.cloud is not None and self.cloud_step("check") == "cloud_newer":
+            log.warning("session: cloud save is newer (another device?); "
+                        "not playing on this device's older save")
+            self.end_session(upload=False)
 
     SETTLE_TIMEOUT = 60
 
@@ -117,7 +122,23 @@ class Scheduler:
             return False
         return True
 
-    def end_session(self) -> None:
+    def cloud_step(self, what: str):
+        try:
+            result = getattr(self.cloud, what)(self.dev)
+            log.info("cloud %s -> %s", what, result)
+            return result
+        except JobAborted as e:
+            self.failures += 1
+            log.error("cloud %s aborted: %s (%d/%d)", what, e, self.failures, self.max_failures)
+            save_failure(e.frame, f"cloud_{what}_{e}")
+            if self.failures >= self.max_failures:
+                log.critical("too many job failures; stopping (exit %d)", EXIT_TOO_MANY_FAILURES)
+                raise SystemExit(EXIT_TOO_MANY_FAILURES)
+            return None
+
+    def end_session(self, upload: bool = True) -> None:
+        if upload and self.cloud is not None and self.last_screen == screens.MINING:
+            self.cloud_step("upload")
         self.dev.go_home()
         length = self.planner.finish()
         log.info("session end: %d s online; next session %s", length,

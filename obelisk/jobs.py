@@ -13,7 +13,8 @@ import cv2
 import numpy as np
 
 from . import screens
-from .screens import A, LOOTBUG_POPUP, MINING, OFFLINE_OPTIONS, OFFLINE_RESULTS, STORE
+from .screens import (A, CLOUD, CLOUD_DOWNLOAD, CLOUD_TIME, CLOUD_UPLOAD, GRID_MENU,
+                      LOOTBUG_POPUP, MINING, OFFLINE_OPTIONS, OFFLINE_RESULTS, STORE)
 
 log = logging.getLogger("obelisk.jobs")
 
@@ -305,3 +306,77 @@ class OfflineGainsInterrupt:
                 save_failure(dev.capture(), "offline_close_stuck")
             return True
         return False
+
+
+class CloudSync:
+    """Keep the newer save, using the game's own comparison on the Cloud screen
+    (grid menu -> Cloud): Download is only active when the cloud save is newer,
+    Upload when this device's save is newer.
+
+    * Download active -> 'cloud_newer'. Never uploads then. (Downloading is not
+      automated until it has been tested by hand once.)
+    * Upload active -> press Upload (turns orange), re-check Download is still
+      disabled, press again; verified by the cloud play time changing.
+    """
+
+    name = "cloud"
+
+    def check(self, dev) -> str:
+        return self._visit(dev, upload=False)
+
+    def upload(self, dev) -> str:
+        return self._visit(dev, upload=True)
+
+    def _visit(self, dev, upload: bool) -> str:
+        frame = dev.capture()
+        if screens.identify(frame) != MINING:
+            raise JobAborted("cloud: not on mining screen", frame)
+        dev.press(*A.get("grid_button").find(frame).center)
+        frame = wait_for(dev, lambda f: screens.identify(f) == GRID_MENU, timeout=5)
+        if frame is None:
+            raise JobAborted("cloud: grid menu did not open", dev.capture())
+        dev.press(*A.get("grid_cloud_button").find(frame).center)
+        frame = wait_for(dev, lambda f: screens.identify(f) == CLOUD, timeout=6)
+        if frame is None:
+            raise JobAborted("cloud: Cloud screen did not open", dev.capture())
+        try:
+            result = self._decide(dev, frame, upload)
+        finally:
+            self._close(dev)
+        return result
+
+    def _decide(self, dev, frame, upload: bool) -> str:
+        if screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled":
+            log.warning("cloud: the cloud save is NEWER than this device's (Download is "
+                        "active), e.g. played on another device; not uploading")
+            save_failure(frame, "cloud_save_newer")
+            return "cloud_newer"
+        up = screens.cloud_button(frame, CLOUD_UPLOAD)
+        if not upload or up == "disabled":
+            return "in_sync" if up == "disabled" else "local_newer"
+        x1, y1, x2, y2 = CLOUD_TIME
+        before = frame[y1:y2, x1:x2].copy()
+        dev.press(*_center(CLOUD_UPLOAD))
+        armed = wait_for(dev, lambda f: screens.cloud_button(f, CLOUD_UPLOAD) == "armed", timeout=3)
+        if armed is None:
+            raise JobAborted("cloud: Upload did not arm", dev.capture())
+        if screens.cloud_button(armed, CLOUD_DOWNLOAD) != "disabled":
+            raise JobAborted("cloud: Download became active; not uploading", armed)
+        dev.press(*_center(CLOUD_UPLOAD))
+        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before), timeout=12)
+        if done is None:
+            raise JobAborted("cloud: upload not verified (cloud time unchanged)", dev.capture())
+        log.info("cloud: uploaded")
+        return "uploaded"
+
+    @staticmethod
+    def _close(dev) -> None:
+        frame = dev.capture()
+        if screens.identify(frame) in (CLOUD, GRID_MENU):
+            dev.press(*A.get("store_close").find(frame).center)
+            if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
+                raise JobAborted("cloud: could not get back to the mining screen", dev.capture())
+
+
+def _center(box) -> tuple[int, int]:
+    return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2

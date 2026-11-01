@@ -44,6 +44,9 @@ ANCHORS = [
     ("offline_confirm",       "73_buffs_after_5min.png",       (120, 1089, 600, 1128)),
     ("offline_results_label", "74_after_offline_confirm.png",  (282, 103, 440, 126)),
     ("offline_close",         "74_after_offline_confirm.png",  (120, 1089, 600, 1128)),
+    # Grid menu -> Cloud screen (save sync)
+    ("grid_cloud_button", "30_grid_menu.png",          (165, 884, 221, 940)),
+    ("cloud_title",       "81_cloud_before_upload.png", (206, 375, 436, 399)),
     # Founder drop: lower half of the parachute crate (ribbon + glowing gem)
     ("founder_crate_1", "50_founder_1.png",            (334, 532, 418, 578)),
     ("founder_crate_2", "50_founder_2.png",            (325, 532, 409, 578)),

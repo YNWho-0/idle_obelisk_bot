@@ -22,7 +22,7 @@ import cv2
 
 from . import screens
 from .device import Device
-from .jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob, LootbugPopupInterrupt,
+from .jobs import (CloudSync, FounderJob, FreebieJob, JobAborted, LootbugJob, LootbugPopupInterrupt,
                    NotificationInterrupt, OfflineGainsInterrupt, save_failure)
 from .session import SessionPlanner
 from .scheduler import Scheduler
@@ -120,7 +120,8 @@ def main() -> None:
             "mode: %s", "always open" if planner is None else "hourly sessions, game in background between")
         Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
                   interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt(), NotificationInterrupt()],
-                  poll=3.0, planner=planner).run_forever()
+                  poll=3.0, planner=planner,
+                  cloud=None if planner is None else CloudSync()).run_forever()
 
 
 if __name__ == "__main__":

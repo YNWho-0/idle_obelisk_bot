@@ -20,7 +20,8 @@ from obelisk import screens                       # noqa: E402
 from obelisk.scheduler import Scheduler          # noqa: E402
 from obelisk.session import SessionPlanner       # noqa: E402
 from obelisk.jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,  # noqa: E402
-                          LootbugPopupInterrupt, NotificationInterrupt, OfflineGainsInterrupt)
+                          LootbugPopupInterrupt, NotificationInterrupt, OfflineGainsInterrupt,
+                          CloudSync)
 
 S = ROOT / "screens"
 
@@ -111,8 +112,8 @@ def test_identify():
     assert screens.identify(load("00_current.png")) == screens.UNKNOWN  # old 1024x732 layout
     for img in (MINING_READY, MINING_READY2, MINING_EMPTY, MINING_CLEAN):
         assert screens.identify(img) == screens.MINING
-    for name in ("30_grid_menu.png", "32_options_display.png"):
-        assert screens.identify(load(name)) == screens.UNKNOWN, name
+    assert screens.identify(load("32_options_display.png")) == screens.UNKNOWN
+    assert screens.identify(load("30_grid_menu.png")) == screens.GRID_MENU
     for name in ("21_bug_popup_1.png", "21_bug_popup_3.png", "23_redbug_press.png"):
         assert screens.identify(load(name)) == screens.LOOTBUG_POPUP, name
     for img in (STORE_READY, STORE_TOAST, STORE_EMPTY):
@@ -500,6 +501,59 @@ def test_session_opens_handles_offline_popups_and_goes_home():
     assert dev.launches == 1 and dev.homes == 1, (dev.launches, dev.homes, dev.presses)
     assert [p[0] for p in dev.presses] == ["off_opts", "off_res"], dev.presses
     assert sched.planner.started is None and sched.planner.next_start > clock[0]
+
+
+# ---------------------------------------------------------------- cloud
+
+GRID_BTN = (334, 1100, 386, 1148)
+GRID_CLOUD = (165, 884, 221, 940)
+UPLOAD_BTN = (452, 652, 562, 700)
+X_BTN = (403, 1100, 453, 1147)
+
+
+def _cloud_frames():
+    FRAMES["grid"] = load("30_grid_menu.png")
+    FRAMES["cloud_ready"] = load("81_cloud_before_upload.png")     # upload enabled
+    FRAMES["cloud_armed"] = load("82_upload_1.png")
+    FRAMES["cloud_busy"] = load("85_upload_confirm_1.png")
+    FRAMES["cloud_done"] = load("87_upload_confirm_3.png")         # cloud time changed
+    FRAMES["calm"] = load("25_after_notification_press.png")
+
+
+def test_cloud_screens_and_buttons():
+    assert screens.identify(load("30_grid_menu.png")) == screens.GRID_MENU
+    assert screens.identify(load("81_cloud_before_upload.png")) == screens.CLOUD
+    f = load("82_upload_1.png")
+    assert screens.cloud_button(f, screens.CLOUD_UPLOAD) == "armed"
+    assert screens.cloud_button(f, screens.CLOUD_DOWNLOAD) == "disabled"
+
+
+def test_cloud_upload_two_presses_verified():
+    _cloud_frames()
+    dev = FakeDevice("calm", FRAMES, {
+        "calm": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_ready"])],
+        "cloud_ready": [(UPLOAD_BTN, ["cloud_armed"])],
+        "cloud_armed": [(UPLOAD_BTN, ["cloud_busy", "cloud_done"])],
+        "cloud_done": [(X_BTN, ["calm"])],
+    })
+    assert CloudSync().upload(dev) == "uploaded"
+    assert [p[0] for p in dev.presses] == ["calm", "grid", "cloud_ready", "cloud_armed", "cloud_done"]
+
+
+def test_cloud_never_uploads_when_cloud_is_newer():
+    _cloud_frames()
+    newer = load("81_cloud_before_upload.png").copy()
+    x1, y1, x2, y2 = screens.CLOUD_UPLOAD
+    newer[437:485, 452:562] = load("81_cloud_before_upload.png")[y1:y2, x1:x2]   # Download looks enabled
+    FRAMES["cloud_newer"] = newer
+    dev = FakeDevice("calm", FRAMES, {
+        "calm": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_newer"])],
+        "cloud_newer": [(X_BTN, ["calm"])],
+    })
+    assert CloudSync().upload(dev) == "cloud_newer"
+    assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses), dev.presses
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from .vision import ANCHOR_DIR, Anchor, Box, Match, clamp, green_fraction
 
 MINING, STORE, LOOTBUG_POPUP, UNKNOWN = "mining", "store", "lootbug_popup", "unknown"
 OFFLINE_OPTIONS, OFFLINE_RESULTS = "offline_options", "offline_results"
+GRID_MENU, CLOUD = "grid_menu", "cloud"
 
 # Where the Store's "Freebie Pack" header may be (Store scroll position can vary).
 FREEBIE_BAND: Box = (150, 200, 340, 1090)
@@ -72,6 +73,8 @@ class A:
             "offline_confirm":       dict(home=(120, 1089, 600, 1128)),
             "offline_results_label": dict(home=(282, 103, 440, 126)),
             "offline_close":         dict(home=(120, 1089, 600, 1128)),
+            "grid_cloud_button": dict(home=(165, 884, 221, 940)),
+            "cloud_title":       dict(home=(206, 375, 436, 399)),
             "founder_crate_1": dict(home=(334, 532, 418, 578), threshold=0.6, search=FOUNDER_AREA),
             "founder_crate_2": dict(home=(325, 532, 409, 578), threshold=0.6, search=FOUNDER_AREA),
             "founder_crate_3": dict(home=(321, 538, 405, 584), threshold=0.6, search=FOUNDER_AREA),
@@ -94,6 +97,10 @@ def identify(frame: np.ndarray) -> str:
         return OFFLINE_RESULTS
     if A.get("store_close").find(frame) and A.get("loot_tables").find(frame):
         return STORE
+    if A.get("store_close").find(frame) and A.get("cloud_title").find(frame):
+        return CLOUD
+    if A.get("store_close").find(frame) and A.get("grid_cloud_button").find(frame):
+        return GRID_MENU
     if (A.get("anvil_button").find(frame) and A.get("grid_button").find(frame)
             and A.get("store_icon").find(frame) and not A.get("store_close").find(frame)):
         return MINING
@@ -230,3 +237,21 @@ def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
         if b - a >= 50 and dark >= 50:
             return int(a), int(b)
     return None
+
+
+# Cloud screen buttons. Measured HSV means: disabled V~42; enabled red H~174
+# V~168; armed (after the 1st Upload press) orange H~13 V~223.
+CLOUD_DOWNLOAD: Box = (452, 437, 562, 485)
+CLOUD_UPLOAD: Box = (452, 652, 562, 700)
+CLOUD_TIME: Box = (186, 420, 402, 446)       # cloud save play time text
+
+
+def cloud_button(frame: np.ndarray, box: Box) -> str:
+    """'disabled' | 'enabled' | 'armed'."""
+    x1, y1, x2, y2 = box
+    h, sat, v = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2HSV).reshape(-1, 3).mean(axis=0)
+    if v < 90:
+        return "disabled"
+    if 5 <= h <= 25 and v > 195:
+        return "armed"
+    return "enabled"
