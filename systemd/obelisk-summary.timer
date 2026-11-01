@@ -1,0 +1,14 @@
+# Install:
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-summary.service
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-summary.timer
+#   systemctl --user enable --now obelisk-summary.timer
+[Unit]
+Description=Daily Idle Obelisk bot summary (00:05)
+
+[Timer]
+OnCalendar=*-*-* 00:05:00
+# run at next boot if the Pi was off at 00:05
+Persistent=true
+
+[Install]
+WantedBy=timers.target

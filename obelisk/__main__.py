@@ -6,12 +6,15 @@
   python -m obelisk lootbug [--dry-run]       # run the Lootbug job once, live
   python -m obelisk founder [--dry-run]       # run the Founder-drop job once, live
   python -m obelisk run                       # scheduler loop
+  python -m obelisk summary [--yesterday|--date D] [--write]   # daily report
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -28,10 +31,14 @@ LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "obelisk.log"
 
 def setup_logging() -> None:
     LOG_FILE.parent.mkdir(exist_ok=True)
+    # rotate at midnight, keep 60 days (obelisk.log.YYYY-MM-DD); the daily
+    # summary reads the current and rotated files
+    file_handler = logging.handlers.TimedRotatingFileHandler(
+        LOG_FILE, when="midnight", backupCount=60, encoding="utf-8")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)],
+        handlers=[logging.StreamHandler(), file_handler],
     )
 
 
@@ -59,7 +66,25 @@ def main() -> None:
                                           help="log presses instead of sending them")
     sub.add_parser("peek", help="capture one live frame (no input), save and identify it")
     sub.add_parser("run")
+    sm = sub.add_parser("summary", help="daily summary from the logs")
+    g = sm.add_mutually_exclusive_group()
+    g.add_argument("--date", help="YYYY-MM-DD (default: today)")
+    g.add_argument("--yesterday", action="store_true")
+    sm.add_argument("--write", action="store_true", help="also save to logs/daily/<date>.txt")
     args = ap.parse_args()
+
+    if args.cmd == "summary":
+        from .summary import LOG_DIR, summarize
+        day = (dt.date.today() - dt.timedelta(days=1)).isoformat() if args.yesterday \
+            else (args.date or dt.date.today().isoformat())
+        text = summarize(day)
+        print(text, end="")
+        if args.write:
+            out = LOG_DIR / "daily" / f"{day}.txt"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text)
+            print(f"(saved {out})")
+        return
 
     if args.cmd == "identify":
         cmd_identify(args.paths)
@@ -84,6 +109,7 @@ def main() -> None:
             save_failure(e.frame, f"{args.cmd}_{e}")
             sys.exit(f"aborted: {e}")
     else:
+        logging.getLogger("obelisk").info("bot started")
         # priority order: the founder crate can vanish; lootbugs/freebies bank up
         Scheduler(dev, [FounderJob(), LootbugJob(), FreebieJob()],
                   interrupts=[LootbugPopupInterrupt(), NotificationInterrupt()], poll=3.0).run_forever()

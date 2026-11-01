@@ -3,6 +3,7 @@ followed by waiting for the expected result; anything unexpected aborts."""
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -178,16 +179,41 @@ class LootbugPopupInterrupt:
 
 class FounderJob:
     """Press the falling Founder parachute crate; rewards are credited at once
-    (no popup). Verified by the crate disappearing."""
+    (no popup). Verified by the crate disappearing.
+
+    The drop is hourly (9 h run: always at :23). The phase is learned from the
+    last claim (persisted in logs/state.json): within WINDOW of the expected
+    time the crate is looked for on every poll, otherwise only every FALLBACK
+    seconds (crate matching costs ~0.35 s per frame on the Pi).
+    """
 
     name = "founder"
     MIN_GAP = 10
+    PERIOD = 3600
+    WINDOW = (-120, 300)    # seconds around the expected drop
+    FALLBACK = 60
 
-    def __init__(self):
+    def __init__(self, state: "State | None" = None, clock=time.time):
         self.last_run = float("-inf")
+        self.last_look = float("-inf")
+        self.state = state if state is not None else State()
+        self.clock = clock
+
+    def in_window(self, t: float) -> bool:
+        last = self.state.get("founder_last_claim")
+        if last is None:
+            return True                      # phase unknown: look every poll
+        phase = (t - last) % self.PERIOD     # seconds since the last expected drop
+        lo, hi = self.WINDOW
+        return phase >= self.PERIOD + lo or phase <= hi
 
     def due(self, now: float, frame: np.ndarray) -> bool:
-        return now - self.last_run >= self.MIN_GAP and screens.founder_crate(frame) is not None
+        if now - self.last_run < self.MIN_GAP:
+            return False
+        if not self.in_window(self.clock()) and now - self.last_look < self.FALLBACK:
+            return False
+        self.last_look = now
+        return screens.founder_crate(frame) is not None
 
     def run(self, dev) -> str:
         self.last_run = time.monotonic()
@@ -200,8 +226,35 @@ class FounderJob:
         dev.press(*crate.center)
         if wait_for(dev, lambda f: screens.founder_crate(f) is None, timeout=4) is None:
             raise JobAborted("founder crate still there after press", dev.capture())
+        self.state.set("founder_last_claim", self.clock())
         log.info("founder drop claimed")
         return "claimed"
+
+
+class State:
+    """Tiny persistent key/value store (logs/state.json)."""
+
+    PATH = Path(__file__).resolve().parent.parent / "logs" / "state.json"
+
+    def __init__(self, path: "Path | None" = None):
+        self.path = path or self.PATH
+        try:
+            self.data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value) -> None:
+        self.data[key] = value
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data, indent=1))
+            tmp.replace(self.path)
+        except OSError as e:
+            log.warning("could not save state: %s", e)
 
 
 class NotificationInterrupt:

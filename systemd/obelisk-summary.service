@@ -1,0 +1,10 @@
+# Writes yesterday's bot summary to ~/idle_obelisk_bot/logs/daily/<date>.txt
+# Triggered by obelisk-summary.timer.
+[Unit]
+Description=Idle Obelisk bot daily summary
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/idle_obelisk_bot
+ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk summary --yesterday --write
+Nice=10

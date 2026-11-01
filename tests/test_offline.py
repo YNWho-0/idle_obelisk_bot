@@ -30,6 +30,7 @@ import obelisk.jobs as _jobs                       # noqa: E402
 _TMP = Path(tempfile.mkdtemp(prefix="obelisk-tests-"))
 _jobs.FAIL_DIR = _TMP / "failures"
 _gems.UNREAD_DIR = _TMP / "gem_unread"
+_jobs.State.PATH = _TMP / "state.json"
 
 
 def load(name: str) -> np.ndarray:
@@ -315,6 +316,55 @@ def test_read_gems():
     for name, value in expect.items():
         assert read_gems(load(name)) == value, (name, read_gems(load(name)))
     assert read_gems(load("00_current.png")) is None      # old layout
+
+
+def test_founder_window_learns_hourly_phase():
+    t0 = 1_000_000.0
+    clock = [t0]
+    job = FounderJob(state=_jobs.State(_TMP / "founder_state.json"), clock=lambda: clock[0])
+    assert job.in_window(t0)                                   # unknown phase: always look
+    dev = FakeDevice("founder", FRAMES, {"founder": [(CRATE, ["founder_gone"])]})
+    assert job.run(dev) == "claimed"                           # claim at t0 -> phase learned
+    for offset, expect in [(600, False), (1800, False), (3600 - 180, False), (3600 - 100, True),
+                           (3600, True), (3600 + 240, True), (3600 + 400, False), (7200 + 10, True)]:
+        assert job.in_window(t0 + offset) == expect, offset
+    # persisted: a fresh job (after a restart) knows the phase too
+    again = FounderJob(state=_jobs.State(_TMP / "founder_state.json"), clock=lambda: clock[0])
+    assert not again.in_window(t0 + 1800)
+
+
+def test_founder_outside_window_looks_only_every_minute():
+    clock = [5_000_000.0]
+    st = _jobs.State(_TMP / "founder_state2.json")
+    st.set("founder_last_claim", clock[0] - 1800)              # mid-hour: outside window
+    job = FounderJob(state=st, clock=lambda: clock[0])
+    crate_frame = load("50_founder_2.png")
+    assert job.due(100.0, crate_frame)                         # first look happens
+    assert not job.due(130.0, crate_frame)                     # 30 s later: skipped
+    assert job.due(161.0, crate_frame)                         # after 60 s: looks again
+
+
+def test_daily_summary():
+    from obelisk.summary import summarize
+    d = _TMP / "sumlogs"
+    (d / "failures").mkdir(parents=True, exist_ok=True)
+    (d / "obelisk.log.2026-01-02").write_text("\n".join([
+        "2026-01-02 00:00:05,1 INFO    obelisk: bot started",
+        "2026-01-02 01:23:20,1 INFO    obelisk.scheduler: job founder -> claimed",
+        "2026-01-02 01:30:00,1 INFO    obelisk.scheduler: gem guard: 6000 -> 6020 ok",
+        "2026-01-02 01:30:00,1 INFO    obelisk.scheduler: job lootbug -> looted",
+        "2026-01-02 02:00:00,1 INFO    obelisk.scheduler: gem guard: couldn't read gems (None -> 6020); not checked",
+        "2026-01-02 02:23:21,1 INFO    obelisk.scheduler: job founder -> claimed",
+        "2026-01-02 02:52:00,1 INFO    obelisk.scheduler: job freebie -> claimed",
+        "2026-01-02 02:52:01,1 INFO    obelisk.scheduler: gem guard: 6040 -> 6230 ok",
+        "2026-01-03 00:00:01,1 INFO    obelisk.scheduler: job founder -> claimed",   # other day
+    ]) + "\n")
+    text = summarize("2026-01-02", d)
+    assert "Founder drops claimed                      2" in text, text
+    assert "Lootbug batches looted                     1" in text
+    assert "6000 -> 6230" in text and "2 checked ok, 1 unreadable" in text
+    assert "Founder times: 01:23 02:23" in text and "Status: OK" in text and "(1 start)" in text
+    assert "No log lines" in summarize("2026-01-05", d)
 
 
 # ---------------------------------------------------------------- scheduler
