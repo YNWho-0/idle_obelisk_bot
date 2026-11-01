@@ -117,6 +117,13 @@ class FakeDevice:
     def sleep(self, s):
         pass
 
+    def swipe(self, x1, y1, x2, y2, ms=500):
+        """script[(frame, "swipe")] = frames shown after a drag (else unchanged)."""
+        assert x1 == x2 == 700, "store drags must stay on the right edge"
+        after = self.script.get((self._shown, "swipe"))
+        if after:
+            self.queue = list(after)
+
     def game_in_front(self):
         return self.in_front
 
@@ -228,6 +235,16 @@ def test_freebie_job_claims_and_closes():
     })
     assert FreebieJob().run(dev) == "claimed"
     assert [p[0] for p in dev.presses] == ["mining_bugs", "store_ready", "store_empty"]
+
+
+def test_freebie_job_scrolls_to_the_row():
+    dev = FakeDevice("mining_bugs", {
+        "mining_bugs": [(STORE_ICON, ["store_top"])],
+        ("store_top", "swipe"): ["store_ready"],
+        "store_ready": [(CLAIM, ["store_toast", "store_empty"])],
+        "store_empty": [(STORE_X, ["store_closed"])],
+    })
+    assert FreebieJob().run(dev) == "claimed"
 
 
 def test_freebie_job_aborts_when_row_not_visible():

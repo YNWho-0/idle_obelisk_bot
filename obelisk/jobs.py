@@ -82,6 +82,8 @@ class FreebieJob:
         try:
             frame = wait_for(dev, lambda f: screens.freebie_state(f)[0] != "unknown", timeout=3)
             if frame is None:
+                frame = find_freebie_row(dev)
+            if frame is None:
                 raise JobAborted("freebie row not recognised", dev.capture())
             state, claim = screens.freebie_state(frame)
             if state == "ready":
@@ -102,6 +104,25 @@ class FreebieJob:
             raise
         close_store(dev)
         return result
+
+
+# The Store keeps its scroll position; the Freebie row sits below the Value
+# Packs / Special / Perks sections. Drag along the right edge (x=700: no
+# buttons there), down first, then back up.
+STORE_DRAG_X = 700
+STORE_DRAGS = [(1000, 450)] * 5 + [(450, 1000)] * 10
+
+
+def find_freebie_row(dev):
+    for y1, y2 in STORE_DRAGS:
+        dev.swipe(STORE_DRAG_X, y1, STORE_DRAG_X, y2, 500)
+        dev.sleep(1.0)
+        frame = dev.capture()
+        if screens.identify(frame) != STORE:
+            return None
+        if screens.freebie_state(frame)[0] != "unknown":
+            return frame
+    return None
 
 
 def close_store(dev) -> None:

@@ -136,7 +136,7 @@ def main() -> None:
         founder = FounderJob()
         planner = None if args.always_open else SessionPlanner(founder)
         logging.getLogger("obelisk").info(
-            "mode: %s", "always open" if planner is None else "hourly sessions, game in background between")
+            "mode: %s", "always open" if planner is None else "a short session every 50 min, game in background between")
         Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
                   interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt()],   # NotificationInterrupt: v1 only
                   poll=3.0, planner=planner,
