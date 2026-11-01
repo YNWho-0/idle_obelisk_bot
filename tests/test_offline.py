@@ -537,8 +537,10 @@ def test_cloud_upload_two_presses_verified():
         "cloud_armed": [(UPLOAD_BTN, ["cloud_busy", "cloud_done"])],
         "cloud_done": [(X_BTN, ["calm"])],
     })
-    assert CloudSync().upload(dev) == "uploaded"
+    st = _jobs.State(_TMP / "cloud_up.json")
+    assert CloudSync(st).upload(dev) == "uploaded"
     assert [p[0] for p in dev.presses] == ["calm", "grid", "cloud_ready", "cloud_armed", "cloud_done"]
+    assert st.get("cloud_last_upload") == 489784          # 05d16h03m04s read after the upload
 
 
 def test_cloud_never_uploads_when_cloud_is_newer():
@@ -552,8 +554,35 @@ def test_cloud_never_uploads_when_cloud_is_newer():
         "grid": [(GRID_CLOUD, ["cloud_newer"])],
         "cloud_newer": [(X_BTN, ["calm"])],
     })
-    assert CloudSync().upload(dev) == "cloud_newer"
+    st = _jobs.State(_TMP / "cloud_newer.json")
+    assert CloudSync(st).upload(dev) == "conflict" and st.get("cloud_conflict")
     assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses), dev.presses
+
+
+def test_cloud_conflict_when_another_device_uploaded():
+    _cloud_frames()
+    st = _jobs.State(_TMP / "cloud_foreign.json")
+    st.set("cloud_last_upload", 489784)                    # what this bot uploaded last
+    FRAMES["cloud_foreign"] = load("90_cloud_newer.png")   # cloud now 05d16h05m58s (the phone)
+    dev = FakeDevice("calm", FRAMES, {
+        "calm": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_foreign"])],
+        "cloud_foreign": [(X_BTN, ["calm"])],
+    })
+    assert CloudSync(st).upload(dev) == "conflict"
+    assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses), dev.presses
+    # stays in conflict on later sessions, even if the times would match again
+    dev2 = FakeDevice("calm", FRAMES, {
+        "calm": [(GRID_BTN, ["grid"])], "grid": [(GRID_CLOUD, ["cloud_ready"])],
+        "cloud_ready": [(X_BTN, ["calm"])]})
+    assert CloudSync(st).upload(dev2) == "conflict"
+
+
+def test_playtime_reader():
+    from obelisk.playtime import CLOUD_ROW, LOCAL_ROW, read_seconds, read_text
+    assert read_text(load("90_cloud_newer.png"), CLOUD_ROW) == "05d16h05m58s"
+    assert read_text(load("86_upload_confirm_2.png"), CLOUD_ROW) == "05d16h03m04s"   # not a sample
+    assert read_seconds(load("81_cloud_before_upload.png"), CLOUD_ROW) == 487050       # 05d15h17m30s
 
 
 if __name__ == "__main__":

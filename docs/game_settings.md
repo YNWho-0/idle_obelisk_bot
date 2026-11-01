@@ -91,3 +91,8 @@ original setup, set every changed row back to its "Original" value.
 | Skip Confirm When Opening Item Chests | off | |
 | Hide All Maxed Archaeology Upgrades | off | |
 | Hide All Maxed Idols | off | |
+
+## Cloud screen (grid menu -> Cloud)
+| Setting | Original | Changed to |
+|---|---|---|
+| **Toggle Cloud Auto-Save** | ON | **off** (2026-11-01 12:52; the bot uploads itself, only when no other device has uploaded since its last upload) |

@@ -69,6 +69,12 @@ def main() -> None:
     rp = sub.add_parser("run")
     rp.add_argument("--always-open", action="store_true",
                     help="keep the game in front all the time (burns buff timers)")
+    cp = sub.add_parser("cloud", help="cloud save conflict status / resolution")
+    cg = cp.add_mutually_exclusive_group()
+    cg.add_argument("--status", action="store_true")
+    cg.add_argument("--keep-pi", action="store_true",
+                    help="resolve a conflict in favour of this device: next session uploads it")
+    cg.add_argument("--conflict", metavar="REASON", help="mark a conflict by hand")
     sm = sub.add_parser("summary", help="daily summary from the logs")
     g = sm.add_mutually_exclusive_group()
     g.add_argument("--date", help="YYYY-MM-DD (default: today)")
@@ -76,6 +82,19 @@ def main() -> None:
     sm.add_argument("--write", action="store_true", help="also save to logs/daily/<date>.txt")
     args = ap.parse_args()
 
+    if args.cmd == "cloud":
+        from .jobs import State
+        st = State()
+        if args.keep_pi:
+            st.set("cloud_conflict", None)
+            st.set("cloud_last_upload", None)
+            print("conflict cleared; the next session uploads this device's save "
+                  "(overwriting the cloud save)")
+        elif args.conflict:
+            st.set("cloud_conflict", args.conflict)
+            print("conflict set:", args.conflict)
+        print("cloud_conflict:", st.get("cloud_conflict"), " cloud_last_upload:", st.get("cloud_last_upload"))
+        return
     if args.cmd == "summary":
         from .summary import LOG_DIR, summarize
         day = (dt.date.today() - dt.timedelta(days=1)).isoformat() if args.yesterday \

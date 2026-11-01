@@ -70,10 +70,10 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
             online += int(m.group(1))
         if msg.startswith("bot started"):
             starts += 1
-        if msg == "cloud upload -> uploaded":
+        if msg.startswith("cloud upload -> uploaded"):
             interrupts["cloud uploads"] += 1
-        if msg == "cloud check -> cloud_newer":
-            interrupts["cloud save newer (session skipped)"] += 1
+        if msg.startswith("session skipped: cloud save conflict"):
+            interrupts["sessions skipped (cloud conflict)"] += 1
         if msg.startswith("interrupt: dismissing notification"):
             interrupts["notifications dismissed"] += 1
         elif msg.startswith("interrupt: closing lootbug popup"):

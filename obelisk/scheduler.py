@@ -82,9 +82,8 @@ class Scheduler:
         self.last_foreground_check = time.monotonic()
         if not self.settle():
             log.warning("session: mining screen not stable after %d s; continuing", self.SETTLE_TIMEOUT)
-        if self.cloud is not None and self.cloud_step("check") == "cloud_newer":
-            log.warning("session: cloud save is newer (another device?); "
-                        "not playing on this device's older save")
+        if self.cloud is not None and self.cloud_step("check") in ("conflict", "cloud_newer"):
+            log.warning("session skipped: cloud save conflict (see 'python -m obelisk cloud --status')")
             self.end_session(upload=False)
 
     SETTLE_TIMEOUT = 60

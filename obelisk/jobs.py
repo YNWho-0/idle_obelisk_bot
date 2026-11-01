@@ -309,17 +309,23 @@ class OfflineGainsInterrupt:
 
 
 class CloudSync:
-    """Keep the newer save, using the game's own comparison on the Cloud screen
-    (grid menu -> Cloud): Download is only active when the cloud save is newer,
-    Upload when this device's save is newer.
+    """Cloud save sync, policy "B": never overwrite progress from another device.
 
-    * Download active -> 'cloud_newer'. Never uploads then. (Downloading is not
-      automated until it has been tested by hand once.)
-    * Upload active -> press Upload (turns orange), re-check Download is still
-      disabled, press again; verified by the cloud play time changing.
+    The bot remembers the cloud play time right after each of its uploads
+    (state "cloud_last_upload"). If the cloud save later shows anything else,
+    another device has uploaded: the bot sets "cloud_conflict" and stops
+    playing/uploading until resolved (python -m obelisk cloud --keep-pi, or a
+    download once the cloud has more play time). The game itself only enables
+    Download when the cloud save has MORE play time than this device's.
+
+    Upload = two presses (red -> orange "armed" -> upload), verified by the
+    cloud play time changing; Download is never pressed (not automated).
     """
 
     name = "cloud"
+
+    def __init__(self, state: "State | None" = None):
+        self.state = state if state is not None else State()
 
     def check(self, dev) -> str:
         return self._visit(dev, upload=False)
@@ -345,12 +351,30 @@ class CloudSync:
             self._close(dev)
         return result
 
+    def _conflict(self, frame, why: str) -> str:
+        if not self.state.get("cloud_conflict"):
+            save_failure(frame, "cloud_conflict")
+        self.state.set("cloud_conflict", why)
+        log.warning("cloud: CONFLICT (%s). Not playing or uploading until resolved: "
+                    "python -m obelisk cloud --keep-pi  (or make the other device's save "
+                    "longer and download it)", why)
+        return "conflict"
+
     def _decide(self, dev, frame, upload: bool) -> str:
+        from .playtime import CLOUD_ROW, read_seconds
         if screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled":
-            log.warning("cloud: the cloud save is NEWER than this device's (Download is "
-                        "active), e.g. played on another device; not uploading")
-            save_failure(frame, "cloud_save_newer")
-            return "cloud_newer"
+            return self._conflict(frame, "cloud save has more play time than this device's")
+        if self.state.get("cloud_conflict"):
+            log.warning("cloud: conflict still unresolved (%s)", self.state.get("cloud_conflict"))
+            return "conflict"
+        cloud_t = read_seconds(frame, CLOUD_ROW)
+        if cloud_t is None:
+            log.warning("cloud: couldn't read the cloud play time; not uploading this session")
+            save_failure(frame, "cloud_time_unreadable")
+            return "unreadable"
+        last = self.state.get("cloud_last_upload")
+        if last is not None and cloud_t != last:
+            return self._conflict(frame, f"cloud play time {cloud_t}s != this bot's last upload {last}s")
         up = screens.cloud_button(frame, CLOUD_UPLOAD)
         if not upload or up == "disabled":
             return "in_sync" if up == "disabled" else "local_newer"
@@ -363,10 +387,13 @@ class CloudSync:
         if screens.cloud_button(armed, CLOUD_DOWNLOAD) != "disabled":
             raise JobAborted("cloud: Download became active; not uploading", armed)
         dev.press(*_center(CLOUD_UPLOAD))
-        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before), timeout=12)
+        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before)
+                        and read_seconds(f, CLOUD_ROW) is not None, timeout=12)
         if done is None:
-            raise JobAborted("cloud: upload not verified (cloud time unchanged)", dev.capture())
-        log.info("cloud: uploaded")
+            raise JobAborted("cloud: upload not verified (cloud time unchanged/unreadable)", dev.capture())
+        new_t = read_seconds(done, CLOUD_ROW)
+        self.state.set("cloud_last_upload", new_t)
+        log.info("cloud: uploaded (cloud play time now %ds)", new_t)
         return "uploaded"
 
     @staticmethod
