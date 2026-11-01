@@ -28,6 +28,7 @@ KNOWN = {
     "51_founder_press_3.png": "4014", "26_redbug_banked.png": "4014",
     "60_stats.png": "4057", "63_stickers.png": "4057",
     "65_gems_4110.png": "4110",   # thin-stroke rendering of 1 and 0
+    "66_gems_6294.png": "6294",   # first 6
 }
 
 

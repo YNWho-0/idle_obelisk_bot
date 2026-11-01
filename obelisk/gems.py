@@ -16,6 +16,9 @@ import numpy as np
 
 from .vision import ANCHOR_DIR
 
+UNREAD_DIR = ANCHOR_DIR.parent.parent / "logs" / "gem_unread"
+MAX_UNREAD_FILES = 50
+
 log = logging.getLogger("obelisk.gems")
 
 GEM_BOX = (466, 126, 568, 148)    # x1, y1, x2, y2: digits end at x~558, gem icon after
@@ -87,6 +90,7 @@ def read_gems(frame: np.ndarray) -> Optional[int]:
             best[ch] = min(best.get(ch, 99.0), _dist(g, s))
         ranked = sorted(best.items(), key=lambda kv: kv[1])
         if len(ranked) < 2 or ranked[0][1] > MAX_DIST or ranked[1][1] - ranked[0][1] < MIN_MARGIN:
+            _save_unread(frame)
             return None
         digits.append(ranked[0][0])
     return int("".join(digits))
@@ -100,3 +104,18 @@ def stable_gems(dev, tries: int = 2) -> Optional[int]:
             dev.sleep(0.3)
         vals.append(read_gems(dev.capture()))
     return vals[0] if vals[0] is not None and all(v == vals[0] for v in vals) else None
+
+
+def _save_unread(frame: np.ndarray) -> None:
+    """Keep the counter crop of failed reads (new digits/formats) for labelling."""
+    try:
+        UNREAD_DIR.mkdir(parents=True, exist_ok=True)
+        if len(list(UNREAD_DIR.glob("*.png"))) >= MAX_UNREAD_FILES:
+            return
+        x1, y1, x2, y2 = GEM_BOX
+        crop = frame[y1:y2, x1:x2]
+        name = UNREAD_DIR / f"{abs(hash(crop.tobytes())) % 10**10}.png"
+        if not name.exists():
+            cv2.imwrite(str(name), crop)
+    except OSError as e:
+        log.debug("could not save unread gem crop: %s", e)

@@ -23,6 +23,14 @@ from obelisk.jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,  # noq
 
 S = ROOT / "screens"
 
+# keep test artefacts out of the real logs/ (they looked like real alarms)
+import tempfile                                    # noqa: E402
+import obelisk.gems as _gems                       # noqa: E402
+import obelisk.jobs as _jobs                       # noqa: E402
+_TMP = Path(tempfile.mkdtemp(prefix="obelisk-tests-"))
+_jobs.FAIL_DIR = _TMP / "failures"
+_gems.UNREAD_DIR = _TMP / "gem_unread"
+
 
 def load(name: str) -> np.ndarray:
     img = cv2.imread(str(S / name))
@@ -303,7 +311,7 @@ def test_read_gems():
     expect = {"01_wm720x1280.png": 3852, "13_store_closed.png": 3882, "22_bug_popup_closed.png": 3884,
               "33_opt_menus_2.png": 3884, "24_after_redbug.png": 3974, "50_founder_3.png": 3994,
               "51_founder_press_1.png": 4014, "64_skins_scrolled.png": 4057,
-              "65_gems_4110.png": 4110}
+              "65_gems_4110.png": 4110, "66_gems_6294.png": 6294}
     for name, value in expect.items():
         assert read_gems(load(name)) == value, (name, read_gems(load(name)))
     assert read_gems(load("00_current.png")) is None      # old layout
