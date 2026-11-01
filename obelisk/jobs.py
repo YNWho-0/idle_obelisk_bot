@@ -441,7 +441,11 @@ class CloudSync:
 
     @staticmethod
     def _close(dev) -> None:
-        frame = dev.capture()
+        # an overlay (e.g. a "Free bomb" toast) can briefly hide the anchors:
+        # wait until the screen is recognisable before deciding
+        frame = wait_for(dev, lambda f: screens.identify(f) in (CLOUD, GRID_MENU, MINING), timeout=5)
+        if frame is None:
+            raise JobAborted("cloud: screen not recognised when closing", dev.capture())
         if screens.identify(frame) in (CLOUD, GRID_MENU):
             dev.press(*A.get("store_close").find(frame).center)
             if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
@@ -450,3 +454,30 @@ class CloudSync:
 
 def _center(box) -> tuple[int, int]:
     return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+
+
+class MenuCloseInterrupt:
+    """Safety net: if the screen sits on one of the bot's own menus (Store,
+    grid menu, Cloud) for AFTER consecutive polls, e.g. after an aborted job,
+    press their (matched) close X to get back to the mining screen."""
+
+    AFTER = 3
+
+    def __init__(self):
+        self.count = 0
+
+    def handle(self, dev, frame: np.ndarray) -> bool:
+        if screens.identify(frame) not in (STORE, GRID_MENU, CLOUD):
+            self.count = 0
+            return False
+        self.count += 1
+        if self.count < self.AFTER:
+            return False
+        self.count = 0
+        x = A.get("store_close").find(frame)
+        if x is None:
+            return False
+        log.warning("interrupt: still on a menu after %d polls; closing it", self.AFTER)
+        dev.press(*x.center)
+        wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=5)
+        return True

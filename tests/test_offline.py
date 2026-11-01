@@ -24,7 +24,8 @@ import obelisk.jobs as _jobs                       # noqa: E402
 import obelisk.playtime as _pt                     # noqa: E402
 from obelisk import screens                        # noqa: E402
 from obelisk.jobs import (CloudSync, FounderJob, FreebieJob, JobAborted,  # noqa: E402
-                          LootbugJob, LootbugPopupInterrupt, OfflineGainsInterrupt)
+                          LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt,
+                          OfflineGainsInterrupt)
 from obelisk.scheduler import Scheduler           # noqa: E402
 from obelisk.session import SessionPlanner        # noqa: E402
 
@@ -291,6 +292,15 @@ def test_offline_interrupt_confirm_then_close():
     assert i.handle(dev, dev.capture())
     assert i.handle(dev, dev.capture())
     assert [p[0] for p in dev.presses] == ["off_opts", "off_res"]
+
+
+def test_menu_close_interrupt_after_three_polls():
+    dev = FakeDevice("cloud_uploaded", {"cloud_uploaded": [(STORE_X, ["store_closed"])]})
+    i = MenuCloseInterrupt()
+    assert not i.handle(dev, dev.capture()) and not i.handle(dev, dev.capture())
+    assert i.handle(dev, dev.capture()) and len(dev.presses) == 1
+    dev2 = FakeDevice("crate_gone", {})
+    assert not any(i.handle(dev2, dev2.capture()) for _ in range(5))      # mining: never
 
 
 def test_popup_interrupt_only_presses_x():

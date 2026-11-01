@@ -30,6 +30,7 @@ KNOWN = {   # layout v2 screenshots with gem counts read by eye
     "n60_resume_5.png": "768",
     "n80_gems_802_crop.png": "802",     # *_crop.png = GEM_BOX crop only
     "n83_gems_928_crop.png": "928",
+    "n85_gems_1083_crop.png": "1083",
 }
 
 
