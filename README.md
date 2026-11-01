@@ -9,6 +9,17 @@ OpenCV. It does three things and never presses anything that costs gems:
 | **lootbug** | Presses a lootbug on the field (one press loots all), then closes the Lootbug popup (a gem shop) with its top-right X only | popup opens, then mining screen returns |
 | **freebie** | Store → Freebie Pack → Claim (only if green) → close | button turns dimmed red |
 
+## Sessions (default): the game stays in the background
+
+With the game's "Consume Buff Timers and Items Buffs offline" option off,
+buffs only tick while the game is in front. Backgrounded (HOME) the game uses
+~0% CPU and counts as offline; freebies and lootbugs bank up meanwhile. So the
+bot keeps the game in the background and brings it to the front for one short
+session per hour, 90 s before the learned Founder drop (hourly, e.g. :23):
+settle (Offline Gains popups: Confirm / Close only), founder crate, lootbugs,
+freebies, then HOME. Typical session: under a minute without a drop, a few
+minutes with one. `python -m obelisk run --always-open` keeps the game open.
+
 ## How it works
 
 * **Fixed resolution**: Android renders at 720x1280 (`adb shell wm size 720x1280`)
