@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from . import screens
-from .screens import A, LOOTBUG_POPUP, MINING, STORE
+from .screens import A, LOOTBUG_POPUP, MINING, OFFLINE_OPTIONS, OFFLINE_RESULTS, STORE
 
 log = logging.getLogger("obelisk.jobs")
 
@@ -283,3 +283,25 @@ class NotificationInterrupt:
             log.warning("notification still shown after press; backing off %d s", self.BACKOFF)
             self.next_ok = now + self.BACKOFF
         return True
+
+
+class OfflineGainsInterrupt:
+    """After the game returns from the background it shows "Offline Gains":
+    first an options screen (press Confirm; the Buffs/Drone-fuel checkboxes are
+    never touched, so buffs stay unconsumed), then a results screen (Close)."""
+
+    def handle(self, dev, frame: np.ndarray) -> bool:
+        screen = screens.identify(frame)
+        if screen == OFFLINE_OPTIONS:
+            log.info("interrupt: offline gains options -> Confirm")
+            dev.press(*A.get("offline_confirm").find(frame).center)
+            if wait_for(dev, lambda f: screens.identify(f) != OFFLINE_OPTIONS, timeout=5) is None:
+                save_failure(dev.capture(), "offline_confirm_stuck")
+            return True
+        if screen == OFFLINE_RESULTS:
+            log.info("interrupt: offline gains results -> Close")
+            dev.press(*A.get("offline_close").find(frame).center)
+            if wait_for(dev, lambda f: screens.identify(f) != OFFLINE_RESULTS, timeout=5) is None:
+                save_failure(dev.capture(), "offline_close_stuck")
+            return True
+        return False

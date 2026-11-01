@@ -18,8 +18,9 @@ sys.path.insert(0, str(ROOT))
 
 from obelisk import screens                       # noqa: E402
 from obelisk.scheduler import Scheduler          # noqa: E402
+from obelisk.session import SessionPlanner       # noqa: E402
 from obelisk.jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,  # noqa: E402
-                          LootbugPopupInterrupt, NotificationInterrupt)
+                          LootbugPopupInterrupt, NotificationInterrupt, OfflineGainsInterrupt)
 
 S = ROOT / "screens"
 
@@ -437,6 +438,65 @@ def test_gem_guard_allows_gain():
     FRAMES["poorer"] = load("24_after_redbug.png")
     dev = FakeGameDevice("poorer", FRAMES, {})
     Scheduler(dev, [], poll=0).run_job(EarnJob())       # must not raise
+
+
+# ---------------------------------------------------------------- sessions
+
+def test_offline_gains_screens():
+    assert screens.identify(load("73_buffs_after_5min.png")) == screens.OFFLINE_OPTIONS
+    assert screens.identify(load("74_after_offline_confirm.png")) == screens.OFFLINE_RESULTS
+
+
+def test_planner_schedules_around_drop():
+    E = 2_000_000.0 + 23 * 60 + 22                     # an expected drop at hh:23:22
+    clock = [E - 3600 + 30]                             # just after the previous hour's claim
+    st = _jobs.State(_TMP / "planner_state.json")
+    st.set("founder_last_claim", E - 3600)
+    founder = FounderJob(state=st, clock=lambda: clock[0])
+    p = SessionPlanner(founder, clock=lambda: clock[0])
+    p.start()
+    assert not p.founder_done(clock[0])                 # a claim from before the session doesn't count
+    assert p.founder_done(E - 3600 + 301)               # ... but that drop's window ends at +300
+    clock[0] = E - 3600 + 400
+    p.finish()
+    assert p.next_start == E - p.LEAD                   # next hour, 90 s early
+    # session for E: founder claimed at E+5 -> done; next session an hour later
+    clock[0] = E - 90; p.start(); assert p.expected_drop(clock[0]) == E
+    assert not p.founder_done(E - 10)
+    st.set("founder_last_claim", E); clock[0] = E + 30
+    assert p.founder_done(clock[0])
+    p.finish(); assert p.next_start == E + 3600 - p.LEAD
+    # no crate this hour: done after the window, next session the hour after
+    clock[0] = E + 3600 - 90; p.start()
+    assert not p.founder_done(E + 3600 + 200) and p.founder_done(E + 3600 + 301)
+    clock[0] = E + 3600 + 301; p.finish(); assert p.next_start == E + 7200 - p.LEAD
+
+
+def test_session_opens_handles_offline_popups_and_goes_home():
+    FRAMES["off_opts"] = load("73_buffs_after_5min.png")
+    FRAMES["off_res"] = load("74_after_offline_confirm.png")
+    CONFIRM = (120, 1089, 600, 1128)
+    dev = FakeGameDevice("off_opts", FRAMES, {
+        "off_opts": [(CONFIRM, ["off_res"])],
+        "off_res": [(CONFIRM, ["no_bugs"])],
+    }, in_front=False, after_launch=("off_opts",))
+    dev.homes = 0
+    def go_home():
+        dev.homes += 1; dev.in_front = False
+    dev.go_home = go_home
+    clock = [3_000_000.0]
+    st = _jobs.State(_TMP / "session_state.json")
+    st.set("founder_last_claim", clock[0] - 3600 - 400)  # next drop ~53 min away: don't wait
+    founder = FounderJob(state=st, clock=lambda: clock[0])
+    sched = Scheduler(dev, [], interrupts=[OfflineGainsInterrupt()], poll=0,
+                      planner=SessionPlanner(founder, clock=lambda: clock[0]))
+    for _ in range(6):
+        sched.session_step()
+        if dev.homes:
+            break
+    assert dev.launches == 1 and dev.homes == 1, (dev.launches, dev.homes, dev.presses)
+    assert [p[0] for p in dev.presses] == ["off_opts", "off_res"], dev.presses
+    assert sched.planner.started is None and sched.planner.next_start > clock[0]
 
 
 if __name__ == "__main__":

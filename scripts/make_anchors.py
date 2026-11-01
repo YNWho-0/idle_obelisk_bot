@@ -38,6 +38,12 @@ ANCHORS = [
     ("lootbug_red_3",    "50_founder_1.png",               (226, 612, 258, 682)),
     ("lootbug_purple_1", "20_giftbug_3.png",               (406, 615, 438, 682)),
     ("lootbug_purple_2", "20_giftbug_3.png",               (316, 615, 348, 682)),
+    # Offline Gains popups shown when the game returns from the background:
+    # 1) options + Confirm (never touch the checkboxes), 2) results + Close
+    ("offline_options_label", "73_buffs_after_5min.png",       (236, 694, 486, 744)),
+    ("offline_confirm",       "73_buffs_after_5min.png",       (120, 1089, 600, 1128)),
+    ("offline_results_label", "74_after_offline_confirm.png",  (282, 103, 440, 126)),
+    ("offline_close",         "74_after_offline_confirm.png",  (120, 1089, 600, 1128)),
     # Founder drop: lower half of the parachute crate (ribbon + glowing gem)
     ("founder_crate_1", "50_founder_1.png",            (334, 532, 418, 578)),
     ("founder_crate_2", "50_founder_2.png",            (325, 532, 409, 578)),

@@ -13,6 +13,7 @@ from . import WIDTH, HEIGHT
 from .vision import ANCHOR_DIR, Anchor, Box, Match, clamp, green_fraction
 
 MINING, STORE, LOOTBUG_POPUP, UNKNOWN = "mining", "store", "lootbug_popup", "unknown"
+OFFLINE_OPTIONS, OFFLINE_RESULTS = "offline_options", "offline_results"
 
 # Where the Store's "Freebie Pack" header may be (Store scroll position can vary).
 FREEBIE_BAND: Box = (150, 200, 340, 1090)
@@ -67,6 +68,10 @@ class A:
             "lootbug_close":  dict(home=(542, 222, 586, 266)),
             **{n: dict(home=LOOTBUG_HOMES[n], threshold=0.75, search=LOOTBUG_FIELD)
                for n in LOOTBUG_HOMES},
+            "offline_options_label": dict(home=(236, 694, 486, 744)),
+            "offline_confirm":       dict(home=(120, 1089, 600, 1128)),
+            "offline_results_label": dict(home=(282, 103, 440, 126)),
+            "offline_close":         dict(home=(120, 1089, 600, 1128)),
             "founder_crate_1": dict(home=(334, 532, 418, 578), threshold=0.6, search=FOUNDER_AREA),
             "founder_crate_2": dict(home=(325, 532, 409, 578), threshold=0.6, search=FOUNDER_AREA),
             "founder_crate_3": dict(home=(321, 538, 405, 584), threshold=0.6, search=FOUNDER_AREA),
@@ -83,6 +88,10 @@ def identify(frame: np.ndarray) -> str:
         return UNKNOWN
     if A.get("lootbug_header").find(frame) and A.get("lootbug_close").find(frame):
         return LOOTBUG_POPUP
+    if A.get("offline_options_label").find(frame) and A.get("offline_confirm").find(frame):
+        return OFFLINE_OPTIONS
+    if A.get("offline_results_label").find(frame) and A.get("offline_close").find(frame):
+        return OFFLINE_RESULTS
     if A.get("store_close").find(frame) and A.get("loot_tables").find(frame):
         return STORE
     if (A.get("anvil_button").find(frame) and A.get("grid_button").find(frame)

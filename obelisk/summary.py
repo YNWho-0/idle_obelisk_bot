@@ -12,6 +12,7 @@ RE_LINE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d),\d+ (\w+)\s+([\w.]+):
 RE_JOB = re.compile(r"^job (\w+) -> (\w+)$")
 RE_ABORT = re.compile(r"^job (\w+) aborted: (.*) \(\d+/\d+\)$")
 RE_GEM_OK = re.compile(r"^gem guard: (\d+) -> (\d+) ok$")
+RE_SESSION = re.compile(r"^session end: (\d+) s online")
 
 LABELS = [
     ("founder", "claimed", "Founder drops claimed"),
@@ -46,6 +47,7 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
     gem_ok = gem_skip = gem_trip = 0
     first_gems = last_gems = None
     founder_times, starts = [], 0
+    sessions, online = 0, 0
     interrupts = Counter()
     for t, level, _, msg in rows:
         if m := RE_JOB.match(msg):
@@ -63,6 +65,9 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
             gem_skip += 1
         if msg.startswith("GEM GUARD"):
             gem_trip += 1
+        if m := RE_SESSION.match(msg):
+            sessions += 1
+            online += int(m.group(1))
         if msg.startswith("bot started"):
             starts += 1
         if msg.startswith("interrupt: dismissing notification"):
@@ -81,6 +86,10 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
     out = [f"Idle Obelisk bot: {date}", "",
            f"Active: {rows[0][0]} - {rows[-1][0]}"
            + (f"   ({starts} start{'s' if starts != 1 else ''})" if starts else ""), ""]
+    if sessions:
+        out.append(f"Sessions: {sessions}, game in front {online // 60} min total "
+                   f"(avg {online / sessions / 60:.1f} min); background (offline) the rest")
+        out.append("")
     out.append("Jobs")
     for job, result, label in LABELS:
         out.append(f"  {label:38s} {jobs.get((job, result), 0):5d}")

@@ -93,6 +93,14 @@ class Device:
                 return f"{PACKAGE}/" in line
         return False
 
+    def go_home(self) -> None:
+        """Send the game to the background (it then counts as offline)."""
+        if self.dry_run:
+            log.info("DRY RUN HOME")
+            return
+        log.info("HOME (game to background)")
+        self._adb("shell", "input", "keyevent", "KEYCODE_HOME")
+
     def launch_game(self) -> None:
         if self.dry_run:
             log.info("DRY RUN launch %s", PACKAGE)

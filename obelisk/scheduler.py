@@ -29,7 +29,7 @@ class Scheduler:
     LAUNCH_WAIT = 90           # seconds to wait for the mining screen after a relaunch
 
     def __init__(self, dev, jobs, interrupts=(), poll: float = 2.0,
-                 max_unknown: int = 15, max_failures: int = 3):
+                 max_unknown: int = 15, max_failures: int = 3, planner=None):
         self.dev = dev
         self.jobs = list(jobs)
         self.interrupts = list(interrupts)
@@ -39,10 +39,67 @@ class Scheduler:
         self.unknown = 0
         self.failures = 0
         self.last_foreground_check = float("-inf")
+        self.planner = planner          # SessionPlanner, or None = game always open
+        self.last_frame = None
+        self.last_screen = None
+        self.session_t0 = None          # monotonic start of the current session
 
     def run_forever(self) -> None:
         while True:
-            self.tick()
+            if self.planner is None:
+                self.tick()
+            else:
+                self.session_step()
+
+    # ---- sessions (game in the background between them) -------------------
+
+    def session_step(self) -> None:
+        p = self.planner
+        now = p.clock()
+        if p.started is None:
+            if now < p.next_start:
+                self.dev.sleep(min(30.0, p.next_start - now))
+                return
+            self.begin_session()
+            return
+        self.tick()
+        if self.session_complete(p.clock()):
+            self.end_session()
+
+    def begin_session(self) -> None:
+        self.planner.start()
+        self.session_t0 = time.monotonic()
+        exp = self.planner.expected_drop(self.planner.clock())
+        log.info("session start (founder expected %s)",
+                 time.strftime("%H:%M:%S", time.localtime(exp)) if exp else "unknown")
+        for job in self.jobs:                 # banked while offline: look right away
+            if job.name == "freebie":
+                job.last_run = float("-inf")
+            if hasattr(job, "last_check"):
+                job.last_check = float("-inf")
+        self.ensure_game_in_front(planned=True)
+        self.last_foreground_check = time.monotonic()
+
+    def session_complete(self, now: float) -> bool:
+        p = self.planner
+        if p.timed_out(now):
+            log.warning("session hit the %d s limit", p.MAX_SESSION)
+            return True
+        if self.last_screen != screens.MINING or not p.founder_done(now):
+            return False
+        for job in self.jobs:
+            if job.name == "freebie" and job.last_run < self.session_t0:
+                return False
+        if any(j.name == "lootbug" for j in self.jobs) and self.last_frame is not None \
+                and screens.lootbug_sprite(self.last_frame) is not None:
+            return False
+        return True
+
+    def end_session(self) -> None:
+        self.dev.go_home()
+        length = self.planner.finish()
+        log.info("session end: %d s online; next session %s", length,
+                 time.strftime("%H:%M:%S", time.localtime(self.planner.next_start)))
 
     def tick(self) -> None:
         now = time.monotonic()
@@ -51,10 +108,12 @@ class Scheduler:
             self.ensure_game_in_front()
 
         frame = self.dev.capture()
+        self.last_frame, self.last_screen = frame, None
         if any(h.handle(self.dev, frame) for h in self.interrupts):
             return
 
         screen = screens.identify(frame)
+        self.last_screen = screen
         if screen != screens.MINING:
             self.unknown += 1
             if self.unknown == self.max_unknown:
@@ -99,14 +158,20 @@ class Scheduler:
             raise SystemExit(EXIT_TOO_MANY_FAILURES)
         log.info("gem guard: %d -> %d ok", before, after)
 
-    def ensure_game_in_front(self) -> None:
+    def ensure_game_in_front(self, planned: bool = False) -> None:
         if self.dev.game_in_front():
             return
-        log.warning("game is not in front; relaunching it")
+        if planned:
+            log.info("bringing the game to the front for the session")
+        else:
+            log.warning("game is not in front; relaunching it")
         self.dev.launch_game()
-        if wait_for(self.dev, lambda f: screens.identify(f) == screens.MINING,
+        # the game may come back with "Offline Gains" popups; interrupts handle them
+        ready = (screens.MINING, screens.OFFLINE_OPTIONS, screens.OFFLINE_RESULTS,
+                 screens.LOOTBUG_POPUP)
+        if wait_for(self.dev, lambda f: screens.identify(f) in ready,
                     timeout=self.LAUNCH_WAIT, interval=3) is None:
             log.error("game relaunched but mining screen not seen within %d s", self.LAUNCH_WAIT)
             save_failure(self.dev.capture(), "relaunch_no_mining_screen")
         else:
-            log.info("game relaunched; back on the mining screen")
+            log.info("game in front again")

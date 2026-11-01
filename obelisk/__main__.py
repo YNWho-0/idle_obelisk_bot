@@ -22,8 +22,9 @@ import cv2
 
 from . import screens
 from .device import Device
-from .jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob,
-                   LootbugPopupInterrupt, NotificationInterrupt, save_failure)
+from .jobs import (FounderJob, FreebieJob, JobAborted, LootbugJob, LootbugPopupInterrupt,
+                   NotificationInterrupt, OfflineGainsInterrupt, save_failure)
+from .session import SessionPlanner
 from .scheduler import Scheduler
 
 LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "obelisk.log"
@@ -65,7 +66,9 @@ def main() -> None:
         sub.add_parser(name).add_argument("--dry-run", action="store_true",
                                           help="log presses instead of sending them")
     sub.add_parser("peek", help="capture one live frame (no input), save and identify it")
-    sub.add_parser("run")
+    rp = sub.add_parser("run")
+    rp.add_argument("--always-open", action="store_true",
+                    help="keep the game in front all the time (burns buff timers)")
     sm = sub.add_parser("summary", help="daily summary from the logs")
     g = sm.add_mutually_exclusive_group()
     g.add_argument("--date", help="YYYY-MM-DD (default: today)")
@@ -111,8 +114,13 @@ def main() -> None:
     else:
         logging.getLogger("obelisk").info("bot started")
         # priority order: the founder crate can vanish; lootbugs/freebies bank up
-        Scheduler(dev, [FounderJob(), LootbugJob(), FreebieJob()],
-                  interrupts=[LootbugPopupInterrupt(), NotificationInterrupt()], poll=3.0).run_forever()
+        founder = FounderJob()
+        planner = None if args.always_open else SessionPlanner(founder)
+        logging.getLogger("obelisk").info(
+            "mode: %s", "always open" if planner is None else "hourly sessions, game in background between")
+        Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
+                  interrupts=[OfflineGainsInterrupt(), LootbugPopupInterrupt(), NotificationInterrupt()],
+                  poll=3.0, planner=planner).run_forever()
 
 
 if __name__ == "__main__":
