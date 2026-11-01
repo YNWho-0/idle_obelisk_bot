@@ -15,6 +15,7 @@ from .vision import ANCHOR_DIR, Anchor, Box, Match, clamp, green_fraction
 MINING, STORE, LOOTBUG_POPUP, UNKNOWN = "mining", "store", "lootbug_popup", "unknown"
 OFFLINE_OPTIONS, OFFLINE_RESULTS = "offline_options", "offline_results"
 GRID_MENU, CLOUD = "grid_menu", "cloud"
+ANR = "android_not_responding"
 
 # LAYOUT v2: the game's native 720x1280 layout (no black bars) used since the
 # 2026-11-01 save reload. v1 values are in git history / screens/v1layout.
@@ -66,6 +67,8 @@ class A:
             "offline_confirm":       dict(home=(74, 1168, 646, 1218)),
             "offline_results_label": dict(home=(284, 10, 436, 31)),
             "offline_close":         dict(home=(74, 1168, 646, 1218)),
+            "anr_title":  dict(home=(117, 560, 452, 588), margin=40),
+            "anr_wait":   dict(home=(110, 666, 260, 706), margin=40),
             "grid_cloud_button": dict(home=(194, 927, 260, 993)),
             "cloud_title":       dict(home=(178, 329, 450, 356)),
             "founder_crate_1": dict(home=(432, 582, 530, 632), threshold=0.6, search=FOUNDER_AREA),
@@ -87,6 +90,8 @@ def store_button(frame: np.ndarray) -> Optional[Match]:
 def identify(frame: np.ndarray) -> str:
     if not right_size(frame):
         return UNKNOWN
+    if A.get("anr_title").find(frame) and A.get("anr_wait").find(frame):
+        return ANR
     if A.get("lootbug_header").find(frame) and A.get("lootbug_close").find(frame):
         return LOOTBUG_POPUP
     if A.get("offline_options_label").find(frame) and A.get("offline_confirm").find(frame):

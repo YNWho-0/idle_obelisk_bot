@@ -64,6 +64,7 @@ class Scheduler:
         self.last_screen = None
         self.session_t0 = None          # monotonic start of the current session
         self.cloud = cloud              # CloudSync, or None
+        self.pause_logged = False
 
     def run_forever(self) -> None:
         while True:
@@ -74,12 +75,39 @@ class Scheduler:
 
     # ---- sessions (game in the background between them) -------------------
 
+    def control(self, now: float) -> str | None:
+        """Dashboard controls via state.json: 'paused' (with reason) or None.
+        Also applies a requested 'session_now'."""
+        from .jobs import State
+        st = State()
+        until = st.get("paused_until")
+        if until is not None:
+            if until == "forever" or now < float(until):
+                if not self.pause_logged:
+                    log.info("paused from the dashboard (%s)", "until resumed" if until == "forever"
+                             else "until " + time.strftime("%H:%M", time.localtime(float(until))))
+                    self.pause_logged = True
+                return "paused"
+            st.set("paused_until", None)
+            log.info("pause ended")
+        if self.pause_logged:
+            log.info("resumed")
+            self.pause_logged = False
+        if st.get("session_now"):
+            st.set("session_now", None)
+            log.info("session requested from the dashboard")
+            self.planner.next_start = now
+        return None
+
     def session_step(self) -> None:
         p = self.planner
         now = p.clock()
         if p.started is None:
+            if self.control(now) == "paused":
+                self.dev.sleep(10.0)
+                return
             if now < p.next_start:
-                self.dev.sleep(min(30.0, p.next_start - now))
+                self.dev.sleep(min(10.0, p.next_start - now))
                 return
             self.begin_session()
             return

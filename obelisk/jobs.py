@@ -482,3 +482,16 @@ class MenuCloseInterrupt:
         dev.press(*x.center)
         wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=5)
         return True
+
+
+class AnrInterrupt:
+    """Android's "Process system isn't responding" dialog (seen after Waydroid
+    froze the container): press "Wait", never "Close app"."""
+
+    def handle(self, dev, frame: np.ndarray) -> bool:
+        if screens.identify(frame) != screens.ANR:
+            return False
+        log.warning("interrupt: Android 'isn't responding' dialog -> Wait")
+        dev.press(*A.get("anr_wait").find(frame).center)
+        wait_for(dev, lambda f: screens.identify(f) != screens.ANR, timeout=5)
+        return True

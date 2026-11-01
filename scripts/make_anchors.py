@@ -41,6 +41,9 @@ ANCHORS = [
     ("offline_confirm",       "n73_resume5min_2.png",  (74, 1168, 646, 1218)),
     ("offline_results_label", "n74_offline_results.png", (284, 10, 436, 31)),
     ("offline_close",         "n74_offline_results.png", (74, 1168, 646, 1218)),
+    # Android "Process system isn't responding" dialog: press "Wait" (never "Close app")
+    ("anr_title",    "n93_anr_dialog.png", (117, 560, 452, 588)),
+    ("anr_wait",     "n93_anr_dialog.png", (110, 666, 260, 706)),
     # Grid menu -> Cloud screen
     ("grid_cloud_button", "n50_grid_menu.png", (194, 927, 260, 993)),
     ("cloud_title",       "n51_cloud.png",     (178, 329, 450, 356)),

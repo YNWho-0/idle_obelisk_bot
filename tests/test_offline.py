@@ -24,7 +24,7 @@ import obelisk.jobs as _jobs                       # noqa: E402
 import obelisk.playtime as _pt                     # noqa: E402
 from obelisk import screens                        # noqa: E402
 from obelisk.jobs import (CloudSync, FounderJob, FreebieJob, JobAborted,  # noqa: E402
-                          LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt,
+                          AnrInterrupt, LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt,
                           OfflineGainsInterrupt)
 from obelisk.scheduler import Scheduler           # noqa: E402
 from obelisk.session import SessionPlanner        # noqa: E402
@@ -73,6 +73,7 @@ F = {
     "options": "n70_options.png",
     "store_full": "n90_mining_store_full.png",      # Store button in its 'bank full' form
     "bug_popup_15": "n91_lootbug_popup_15.png",     # 2-digit count shifts the centred header
+    "anr": "n93_anr_dialog.png",                    # Android "isn't responding" over the game
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -152,7 +153,7 @@ def test_identify():
         "bug_popup": screens.LOOTBUG_POPUP, "grid": screens.GRID_MENU, "cloud": screens.CLOUD,
         "off_opts": screens.OFFLINE_OPTIONS, "off_res": screens.OFFLINE_RESULTS,
         "options": screens.UNKNOWN, "store_full": screens.MINING,
-        "bug_popup_15": screens.LOOTBUG_POPUP,
+        "bug_popup_15": screens.LOOTBUG_POPUP, "anr": screens.ANR,
     }
     for k, v in expect.items():
         assert screens.identify(FRAMES[k]) == v, (k, screens.identify(FRAMES[k]))
@@ -316,6 +317,13 @@ def test_menu_close_interrupt_after_three_polls():
     assert not any(i.handle(dev2, dev2.capture()) for _ in range(5))      # mining: never
 
 
+def test_anr_interrupt_presses_wait_only():
+    WAIT = (110, 666, 260, 706)
+    dev = FakeDevice("anr", {"anr": [(WAIT, ["crate_gone"])]})
+    assert AnrInterrupt().handle(dev, dev.capture()) and len(dev.presses) == 1
+    assert not AnrInterrupt().handle(dev, FRAMES["crate_gone"])
+
+
 def test_popup_interrupt_only_presses_x():
     dev = FakeDevice("bug_popup", {"bug_popup": [(BUG_POPUP_X, ["store_closed"])]})
     assert LootbugPopupInterrupt().handle(dev, dev.capture()) and len(dev.presses) == 1
@@ -393,6 +401,37 @@ def test_alerts_are_deduplicated_and_never_raise():
         raise OSError("network down")
     assert not _notify.alert("other", "t", "m", state=st, sender=boom)   # logged, no raise
     assert len(sent) == 2
+
+
+def test_pause_and_session_now_controls():
+    clock = [5_000_000.0]
+    st = _jobs.State()                                 # same file the scheduler reads
+    st.set("paused_until", "forever")
+    dev = FakeDevice("crate_gone", {}, in_front=False)
+    planner = SessionPlanner(clock=lambda: clock[0])
+    sched = Scheduler(dev, [], poll=0, planner=planner)
+    sched.session_step()
+    assert dev.launches == 0 and planner.started is None       # paused: no session
+    st = _jobs.State(); st.set("paused_until", None); st.set("session_now", True)
+    planner.next_start = clock[0] + 9999
+    assert sched.control(clock[0]) is None and planner.next_start == clock[0]
+    assert _jobs.State().get("session_now") is None
+    st = _jobs.State(); st.set("paused_until", clock[0] - 1)    # expired timed pause
+    assert sched.control(clock[0]) is None and _jobs.State().get("paused_until") is None
+
+
+def test_dashboard_controls_need_token():
+    import obelisk.dashboard as D
+    D.CONF = _TMP / "dash.conf"
+    app = D.create_app(); tok = D.ensure_conf()["token"]
+    c = app.test_client()
+    assert c.post("/control", data={"a": "pause"}).status_code == 403
+    c.get("/?t=" + tok)
+    assert c.post("/control", data={"a": "pause1"}).status_code == 303
+    assert isinstance(_jobs.State().get("paused_until"), float)
+    assert c.post("/control", data={"a": "resume"}).status_code == 303
+    assert _jobs.State().get("paused_until") is None
+    assert c.get("/").status_code == 200
 
 
 def test_scheduler_never_presses_off_mining_screen():

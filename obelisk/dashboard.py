@@ -147,6 +147,8 @@ def collect() -> dict:
         "events": events,
         "failures": [p.name for p in failures],
         "reports": reports,
+        "paused_until": st.get("paused_until"),
+        "session_now": st.get("session_now"),
         "latest_mtime": (dt.datetime.fromtimestamp((LOGS / "latest.jpg").stat().st_mtime)
                          if (LOGS / "latest.jpg").exists() else None),
     }
@@ -203,7 +205,10 @@ font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .ev{font:12px/1.5 ui-monospace,Menlo,monospace;overflow-x:auto;white-space:nowrap}
 .ev div{padding:1px 0}.ev .WARNING{color:var(--warn)}.ev .ERROR,.ev .CRITICAL{color:var(--bad)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px}.kv span:nth-child(odd){color:var(--muted)}
-a{color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
+a{color:var(--accent)}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.ctl button{font:inherit;font-size:14px;padding:7px 12px;border-radius:9px;border:1px solid var(--line);
+background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
 </style></head><body><main>
 <h1>Idle Obelisk bot</h1>
 <div class="sub">updated {{ d.now.strftime('%a %H:%M:%S') }} · refreshes every minute</div>
@@ -211,6 +216,7 @@ a{color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;fon
 <div class="card">
  <h2>Status</h2>
  {% if d.service != 'active' %}<span class="badge bad">bot {{ d.service }}</span>
+ {% elif d.paused_until %}<span class="badge warn">paused {{ 'until resumed' if d.paused_until == 'forever' else 'until ' + pause_until_txt }}</span>
  {% elif d.cloud_conflict %}<span class="badge warn">paused: cloud conflict</span>
  {% elif d.in_session %}<span class="badge ok">in a session now</span>
  {% else %}<span class="badge ok">running · game in background</span>{% endif %}
@@ -218,6 +224,13 @@ a{color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;fon
   <span>Last session</span><span>{% if d.last_end %}{{ d.last_end.strftime('%H:%M') }} ({{ d.last_len }} s in front){% else %}-{% endif %}</span>
   <span>Next session</span><span>{{ d.next_session or '-' }}</span>
   <span>Gems</span><span>{{ d.gem_now if d.gem_now is not none else '-' }}</span>
+  <span>Controls</span><span>
+   <form method="post" action="control" class="ctl">
+    {% if d.paused_until %}<button name="a" value="resume">Resume</button>
+    {% else %}<button name="a" value="pause1">Pause 1 h</button><button name="a" value="pause4">Pause 4 h</button><button name="a" value="pause">Pause until resumed</button>{% endif %}
+    <button name="a" value="now" {{ 'disabled' if d.paused_until or d.session_now or d.in_session }}>{{ 'Session requested…' if d.session_now else 'Run a session now' }}</button>
+   </form>
+   <span class="sub">Pause before playing on the Pi; a running session finishes first.</span></span>
   <span>Cloud</span><span>{% if d.cloud_conflict %}<b style="color:var(--warn)">conflict:</b> {{ d.cloud_conflict }}{% else %}in sync · last upload {{ d.cloud_last }}{% endif %}</span>
  </div>
 </div>
@@ -281,7 +294,30 @@ def create_app() -> Flask:
     @app.get("/")
     def index():
         d = collect()
-        return render_template_string(PAGE, d=d, chart=gem_svg(d["gems"]))
+        pu = d["paused_until"]
+        txt = (dt.datetime.fromtimestamp(float(pu)).strftime("%H:%M")
+               if pu not in (None, "forever") else "")
+        return render_template_string(PAGE, d=d, chart=gem_svg(d["gems"]), pause_until_txt=txt)
+
+    @app.post("/control")
+    def control():
+        from .jobs import State
+        st = State()
+        a = request.form.get("a")
+        now = dt.datetime.now().timestamp()
+        if a == "pause1":
+            st.set("paused_until", now + 3600)
+        elif a == "pause4":
+            st.set("paused_until", now + 4 * 3600)
+        elif a == "pause":
+            st.set("paused_until", "forever")
+        elif a == "resume":
+            st.set("paused_until", None)
+        elif a == "now":
+            st.set("session_now", True)
+        else:
+            abort(400)
+        return redirect("./", code=303)
 
     @app.get("/latest.jpg")
     def latest():
