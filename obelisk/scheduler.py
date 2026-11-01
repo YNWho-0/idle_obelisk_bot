@@ -14,6 +14,7 @@ import logging
 import time
 
 from . import screens
+from .gems import stable_gems
 from .jobs import JobAborted, save_failure, wait_for
 
 # Exit code for "stopped on purpose after repeated job failures"; the
@@ -71,6 +72,7 @@ class Scheduler:
         self.dev.sleep(self.poll)
 
     def run_job(self, job) -> None:
+        before = stable_gems(self.dev)
         try:
             log.info("job %s -> %s", job.name, job.run(self.dev))
             self.failures = 0
@@ -81,6 +83,21 @@ class Scheduler:
             if self.failures >= self.max_failures:
                 log.critical("too many job failures; stopping (exit %d)", EXIT_TOO_MANY_FAILURES)
                 raise SystemExit(EXIT_TOO_MANY_FAILURES)
+        finally:
+            self.check_gems(job, before)
+
+    def check_gems(self, job, before) -> None:
+        """Gem guard: no bot job may ever leave us with fewer gems."""
+        after = stable_gems(self.dev)
+        if before is None or after is None:
+            log.info("gem guard: couldn't read gems (%s -> %s); not checked", before, after)
+            return
+        if after < before:
+            log.critical("GEM GUARD: gems went %d -> %d during job %s; stopping (exit %d)",
+                         before, after, job.name, EXIT_TOO_MANY_FAILURES)
+            save_failure(self.dev.capture(), f"GEM_GUARD_{job.name}_{before}_to_{after}")
+            raise SystemExit(EXIT_TOO_MANY_FAILURES)
+        log.info("gem guard: %d -> %d ok", before, after)
 
     def ensure_game_in_front(self) -> None:
         if self.dev.game_in_front():

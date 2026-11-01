@@ -298,6 +298,16 @@ def test_notification_interrupt_dismisses_once():
     assert not NotificationInterrupt().handle(dev, FRAMES["no_notif"])
 
 
+def test_read_gems():
+    from obelisk.gems import read_gems
+    expect = {"01_wm720x1280.png": 3852, "13_store_closed.png": 3882, "22_bug_popup_closed.png": 3884,
+              "33_opt_menus_2.png": 3884, "24_after_redbug.png": 3974, "50_founder_3.png": 3994,
+              "51_founder_press_1.png": 4014, "64_skins_scrolled.png": 4057}
+    for name, value in expect.items():
+        assert read_gems(load(name)) == value, (name, read_gems(load(name)))
+    assert read_gems(load("00_current.png")) is None      # old layout
+
+
 # ---------------------------------------------------------------- scheduler
 
 class FakeGameDevice(FakeDevice):
@@ -322,13 +332,15 @@ def test_scheduler_relaunches_game_when_not_in_front():
 
 
 def test_scheduler_runs_first_due_job_from_mining():
-    dev = FakeGameDevice("redbug", FRAMES, {
-        "redbug": [(BUG_SLOTS, ["bug_popup"])],
+    # frames 25 -> 23 -> 24 all show 3974 gems, so the gem guard stays quiet
+    FRAMES["redbug_3974"] = load("25_after_notification_press.png")
+    dev = FakeGameDevice("redbug_3974", FRAMES, {
+        "redbug_3974": [(BUG_SLOTS, ["bug_popup"])],
         "bug_popup": [(BUG_POPUP_X, ["no_bugs"])],
     })
     sched = Scheduler(dev, [FounderJob(), LootbugJob()], poll=0)
     sched.tick()
-    assert [p[0] for p in dev.presses] == ["redbug", "bug_popup"], dev.presses
+    assert [p[0] for p in dev.presses] == ["redbug_3974", "bug_popup"], dev.presses
 
 
 def test_scheduler_never_presses_off_mining_screen():
@@ -339,6 +351,35 @@ def test_scheduler_never_presses_off_mining_screen():
     assert not dev.presses and sched.unknown == 3
 
 
+def test_gem_guard_stops_on_loss():
+    class SpendJob:
+        name = "spend"
+        def run(self, dev):
+            dev.queue = ["poorer"]
+            return "done"
+    FRAMES["richer"] = load("51_founder_press_3.png")     # 4014 gems
+    FRAMES["poorer"] = load("24_after_redbug.png")        # 3974 gems
+    dev = FakeGameDevice("richer", FRAMES, {})
+    try:
+        Scheduler(dev, [], poll=0).run_job(SpendJob())
+    except SystemExit as e:
+        assert e.code == 3
+    else:
+        raise AssertionError("gem guard did not trip")
+
+
+def test_gem_guard_allows_gain():
+    class EarnJob:
+        name = "earn"
+        def run(self, dev):
+            dev.queue = ["richer"]
+            return "done"
+    FRAMES["richer"] = load("51_founder_press_3.png")
+    FRAMES["poorer"] = load("24_after_redbug.png")
+    dev = FakeGameDevice("poorer", FRAMES, {})
+    Scheduler(dev, [], poll=0).run_job(EarnJob())       # must not raise
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
@@ -346,7 +387,7 @@ if __name__ == "__main__":
         try:
             fn()
             print(f"PASS {name}")
-        except Exception:
+        except BaseException:          # incl. SystemExit from the gem guard
             failed += 1
             print(f"FAIL {name}")
             traceback.print_exc()
