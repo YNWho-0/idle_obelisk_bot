@@ -77,6 +77,7 @@ def main() -> None:
                     help="resolve a conflict in favour of this device: next session uploads it")
     cg.add_argument("--conflict", metavar="REASON", help="mark a conflict by hand")
     nt = sub.add_parser("notify-test", help="send a test alert to the phone")
+    sub.add_parser("bootcheck", help="post-boot health check, result sent to the phone")
     db = sub.add_parser("dashboard", help="read-only phone dashboard (Flask)")
     db.add_argument("--host", default="0.0.0.0")
     db.add_argument("--port", type=int)
@@ -89,6 +90,10 @@ def main() -> None:
     sm.add_argument("--write", action="store_true", help="also save to logs/daily/<date>.txt")
     args = ap.parse_args()
 
+    if args.cmd == "bootcheck":
+        from .bootcheck import run
+        run()
+        return
     if args.cmd == "dashboard":
         from .dashboard import ensure_conf, serve
         if args.link:
@@ -129,6 +134,11 @@ def main() -> None:
         text = summarize(day)
         print(text, end="")
         if args.write:
+            import time as _t
+            cutoff = _t.time() - 30 * 86400          # keep failure screenshots 30 days
+            for old in (LOG_DIR / "failures").glob("*.png"):
+                if old.stat().st_mtime < cutoff:
+                    old.unlink()
             out = LOG_DIR / "daily" / f"{day}.txt"
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text)
@@ -155,7 +165,10 @@ def main() -> None:
         try:
             dev.ensure_resolution()  # re-applies wm size if Waydroid lost it
         except Exception as e:
+            from .bootcheck import uptime_s
             from .notify import alert
+            if uptime_s() < 600:          # still booting (Waydroid not up yet): bootcheck reports
+                raise
             alert("crash", "Obelisk bot can't start (systemd retries every 60 s)",
                   f"{type(e).__name__}: {e}. Often Waydroid/adb not running.",
                   priority="high", tags="warning")
@@ -182,7 +195,10 @@ def main() -> None:
                       poll=3.0, planner=planner,
                       cloud=None if planner is None else CloudSync()).run_forever()
         except Exception as e:
+            from .bootcheck import uptime_s
             from .notify import alert
+            if uptime_s() < 600:
+                raise
             alert("crash", "Obelisk bot crashed (systemd retries every 60 s)",
                   f"{type(e).__name__}: {e}. Often Waydroid/adb not running.",
                   priority="high", tags="warning")

@@ -1,0 +1,8 @@
+# Post-boot health check: sends "Pi rebooted: all OK / PROBLEMS" to the phone.
+[Unit]
+Description=Idle Obelisk bot post-boot check
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/idle_obelisk_bot
+ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk bootcheck

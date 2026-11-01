@@ -1,0 +1,12 @@
+# Install:
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-bootcheck.service
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-bootcheck.timer
+#   systemctl --user enable obelisk-bootcheck.timer
+[Unit]
+Description=Idle Obelisk bot post-boot check (8 min after boot)
+
+[Timer]
+OnStartupSec=8min
+
+[Install]
+WantedBy=timers.target
