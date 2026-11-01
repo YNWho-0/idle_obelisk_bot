@@ -80,6 +80,8 @@ def main() -> None:
     db = sub.add_parser("dashboard", help="read-only phone dashboard (Flask)")
     db.add_argument("--host", default="0.0.0.0")
     db.add_argument("--port", type=int)
+    db.add_argument("--link", action="store_true",
+                    help="print the phone links (with the secret token) and exit")
     sm = sub.add_parser("summary", help="daily summary from the logs")
     g = sm.add_mutually_exclusive_group()
     g.add_argument("--date", help="YYYY-MM-DD (default: today)")
@@ -88,7 +90,14 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.cmd == "dashboard":
-        from .dashboard import serve
+        from .dashboard import ensure_conf, serve
+        if args.link:
+            c = ensure_conf()
+            port = c.get("port", "8765")
+            print("Open once on your phone (a cookie remembers it):")
+            print(f"  home Wi-Fi : http://192.168.86.149:{port}/?t={c['token']}")
+            print(f"  Tailscale  : http://100.106.103.61:{port}/?t={c['token']}")
+            return
         serve(args.host, args.port)
         return
     if args.cmd == "notify-test":
