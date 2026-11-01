@@ -70,9 +70,7 @@ class Scheduler:
     def begin_session(self) -> None:
         self.planner.start()
         self.session_t0 = time.monotonic()
-        exp = self.planner.expected_drop(self.planner.clock())
-        log.info("session start (founder expected %s)",
-                 time.strftime("%H:%M:%S", time.localtime(exp)) if exp else "unknown")
+        log.info("session start")
         for job in self.jobs:                 # banked while offline: look right away
             if job.name == "freebie":
                 job.last_run = float("-inf")

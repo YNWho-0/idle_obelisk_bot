@@ -182,10 +182,10 @@ class FounderJob:
     """Press the falling Founder parachute crate; rewards are credited at once
     (no popup). Verified by the crate disappearing.
 
-    The drop is hourly (9 h run: always at :23). The phase is learned from the
-    last claim (persisted in logs/state.json): within WINDOW of the expected
-    time the crate is looked for on every poll, otherwise only every FALLBACK
-    seconds (crate matching costs ~0.35 s per frame on the Pi).
+    The crate drops on the game's own hourly cycle (not restarted by claims)
+    and waits on the field until pressed, so it is simply looked for on every
+    poll (~0.35 s per frame on the Pi; sessions are short). The last claim
+    time is still recorded in logs/state.json for the daily summary.
     """
 
     name = "founder"
@@ -201,12 +201,10 @@ class FounderJob:
         self.clock = clock
 
     def in_window(self, t: float) -> bool:
-        last = self.state.get("founder_last_claim")
-        if last is None:
-            return True                      # phase unknown: look every poll
-        phase = (t - last) % self.PERIOD     # seconds since the last expected drop
-        lo, hi = self.WINDOW
-        return phase >= self.PERIOD + lo or phase <= hi
+        """Always look. The drop cycle is NOT anchored to claims (the Store
+        countdown read 28:48 right after a claim) and the crate waits on the
+        field, so there is no window to predict; sessions are short anyway."""
+        return True
 
     def due(self, now: float, frame: np.ndarray) -> bool:
         if now - self.last_run < self.MIN_GAP:

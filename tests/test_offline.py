@@ -331,6 +331,15 @@ def test_session_opens_handles_offline_popups_runs_jobs_and_goes_home():
     assert [p[0] for p in dev.presses] == ["off_opts", "off_res", "crate_gone", "bug_popup"]
 
 
+def test_planner_every_50_minutes_and_never_waits():
+    clock = [1_000_000.0]
+    p = SessionPlanner(clock=lambda: clock[0])
+    assert p.next_start == clock[0]                        # first session right away
+    p.start(); assert p.founder_done(clock[0])             # nothing to wait for
+    clock[0] += 30; assert p.finish() == 30
+    assert p.next_start == 1_000_000.0 + 50 * 60
+
+
 def test_scheduler_never_presses_off_mining_screen():
     dev = FakeDevice("options", {})
     sched = Scheduler(dev, [FounderJob(state=_jobs.State(_TMP / "n.json")), LootbugJob(),
