@@ -1,56 +1,94 @@
 # Idle Obelisk Miner bot (v2)
 
 Runs on a Raspberry Pi 5 against the Android game in Waydroid, via ADB +
-OpenCV. It does three things and never presses anything that costs gems:
+OpenCV. It never presses anything that costs gems.
 
 | Job | What it does | Verified by |
 |---|---|---|
-| **founder** | Presses the falling "FOUNDER" parachute crate | crate disappears |
+| **founder** | Presses the "FOUNDER" parachute crate | crate disappears |
 | **lootbug** | Presses a lootbug on the field (one press loots all), then closes the Lootbug popup (a gem shop) with its top-right X only | popup opens, then mining screen returns |
-| **freebie** | Store → Freebie Pack → Claim (only if green) → close | button turns dimmed red |
+| **freebie** | Store → (scrolls to) Freebie Pack → Claim (only if green) → close | button turns dimmed red |
+| **cloud** | Cloud screen: re-disables in-game Cloud Auto-Save, then uploads the save (two presses) unless another device has uploaded since | cloud play time changes |
 
-## Sessions (default): the game stays in the background
+## Sessions: the game stays in the background
 
 With the game's "Consume Buff Timers and Items Buffs offline" option off,
-buffs only tick while the game is in front. Backgrounded (HOME) the game uses
-~0% CPU and counts as offline; freebies and lootbugs bank up meanwhile. So the
-bot keeps the game in the background and brings it to the front for one short
-session per hour, 90 s before the learned Founder drop (hourly, e.g. :23):
-settle (Offline Gains popups: Confirm / Close only), founder crate, lootbugs,
-freebies, then HOME. Typical session: under a minute without a drop, a few
-minutes with one. `python -m obelisk run --always-open` keeps the game open.
+buffs only tick while the game is in front. In the background (HOME) the game
+uses ~0% CPU and counts as offline; freebies and lootbugs bank up meanwhile,
+and the Founder crate drops on its own hourly cycle and waits on the field.
+
+So the bot keeps the game in the background and brings it to the front for
+**one short session every 50 minutes** (< the 60 min drop cycle, so no drop
+is ever missed):
+
+1. settle: "Offline Gains" popups → Confirm, then Close (never the checkboxes)
+2. cloud check (see below)
+3. founder crate, lootbugs, freebies (whatever is there)
+4. cloud upload, then HOME
+
+A session takes ~30 s. `python -m obelisk run --always-open` keeps the game
+open instead (burns buff timers).
+
+## Cloud saves (policy: never overwrite another device's progress)
+
+After each upload the bot remembers the cloud play time. If the cloud later
+shows something else, another device (e.g. the iPhone) has uploaded: the bot
+marks a **conflict**, skips sessions and alerts the phone until resolved:
+
+```bash
+venv/bin/python -m obelisk cloud --status
+venv/bin/python -m obelisk cloud --keep-pi   # the Pi's save wins at the next session
+```
+
+To keep the phone's save instead, play long enough on the phone that its play
+time passes the Pi's, upload, and download it on the Pi (by hand for now; the
+game only enables Download when the cloud save has more play time). Loading a
+save restores that save's settings, including Cloud Auto-Save, which the bot
+turns off again. **Stop the bot before pressing anything on the Pi yourself**
+(it can't tell your presses from its own).
+
+## Phone alerts (ntfy)
+
+The ntfy app subscribed to the topic in `notify.conf` (gitignored; keep it
+private) gets: gem guard / failure stops (urgent), cloud conflicts and crashes
+(high), stuck screens and session timeouts, and the nightly summary (quiet
+unless it needs a look). Each kind is sent at most once per 6 h.
+`venv/bin/python -m obelisk notify-test` sends a test alert.
 
 ## How it works
 
 * **Fixed resolution**: Android renders at 720x1280 (`adb shell wm size 720x1280`)
-  inside the 1024x732 Waydroid window. The bot refuses to run at any other size.
+  inside the 1024x732 Waydroid window; the bot re-applies it if lost.
+  Since 2026-11-01 the game uses its native layout for that size ("layout v2",
+  no black bars); old-layout material is in `screens/v1layout/` and `legacy/`.
 * **Raw capture**: `adb exec-out screencap` (no PNG), decoded with numpy.
 * **Held presses**: the game ignores `input tap`; every press is
   `input swipe X Y X Y 150`.
 * **Screens = small anchors** (`obelisk/anchors/*.png`, cut from `screens/` by
   `scripts/make_anchors.py`). Every press targets an anchor matched on a fresh
-  frame, and every press waits for the expected result; anything unexpected
-  aborts and saves a screenshot to `logs/failures/`.
-* **One scheduler** (`obelisk/scheduler.py`): popups are interrupts (the Lootbug
-  popup is always closed via its X), then the first due job runs, in priority
-  order founder → lootbug → freebie. It only acts on the mining screen, so it
-  waits while you're in a menu.
-* **Lootbug skins**: in-game crops for Default/Halloween plus masked templates for
-  all 14 skins (7 regular + 7 golden) built from a wiki screenshot by
-  `scripts/make_wiki_lootbugs.py`.
+  frame and waits for the expected result; anything unexpected aborts and
+  saves a screenshot to `logs/failures/`.
+* **One scheduler** (`obelisk/scheduler.py`): popups are interrupts, then the
+  first due job runs (founder → lootbug → freebie), only from the mining
+  screen; a watchdog relaunches the game if it isn't in front during a session.
+* **Gem guard**: the gem counter is read before and after every job (strict
+  digit matching; unknown digits → skip, never guess); a drop stops the bot.
+* **Lootbug skins**: in-game crops plus masked templates of all 14 skins
+  (7 regular + 7 golden) from a wiki screenshot (`scripts/make_wiki_lootbugs.py`).
 
 ## Running
 
 ```bash
-systemctl --user status obelisk-bot          # it's a user service (lingering on)
-systemctl --user stop obelisk-bot            # pause while playing by hand
+systemctl --user status obelisk-bot          # user service (lingering on)
+systemctl --user stop obelisk-bot            # pause, e.g. while playing on the Pi
 systemctl --user start obelisk-bot
 tail -f logs/obelisk.log                     # every press is logged
+venv/bin/python -m obelisk summary           # today so far; nightly reports in logs/daily/
 ```
 
-A bot that stopped itself after 3 failed jobs exits with code 3 and is NOT
-restarted; check `logs/failures/` first. Crashes (adb, Waydroid down) retry
-every 60 s.
+A bot that stopped itself (3 failed jobs, or the gem guard) exits with code 3
+and is NOT restarted; check `logs/failures/` first. Crashes (adb, Waydroid
+down) retry every 60 s.
 
 One-off commands (stop the service first):
 
@@ -64,20 +102,22 @@ venv/bin/python -I tests/test_offline.py     # offline tests, no device needed
 ## Game settings
 
 The bot setup changed 12 in-game Options (noise off, Lootbug gem confirmation
-back on). Originals are in `docs/game_settings.md`;
-`venv/bin/python -I scripts/set_options.py --restore` puts them back (start
-with the Options screen open).
+back on) plus Cloud Auto-Save off. Originals are in `docs/game_settings.md`;
+`venv/bin/python -I scripts/set_options.py --check | --restore` (start with the
+Options screen open).
 
 ## Layout
 
 ```
-obelisk/      bot package (device, vision, screens, jobs, scheduler, CLI)
-obelisk/anchors/   templates (generated; see scripts/)
-screens/      reference screenshots the anchors and tests are built from
-scripts/      make_anchors.py, make_wiki_lootbugs.py, set_options.py
+obelisk/      bot package (device, vision, screens, jobs, scheduler, session,
+              gems, playtime, notify, summary, CLI)
+obelisk/anchors/   templates and glyph samples (generated; see scripts/)
+screens/      layout-v2 reference screenshots (anchors and tests are cut from them)
+scripts/      make_anchors, make_wiki_lootbugs, make_gem_digits,
+              make_playtime_glyphs, set_options
 tests/        offline tests against screens/
-systemd/      obelisk-bot.service (user unit)
+systemd/      obelisk-bot.service, obelisk-summary.{service,timer} (user units)
 docs/         game_settings.md
 reference/    wiki screenshot of lootbug skins
-legacy/       the August 2026 bot (never sent input to the game; kept for reference)
+legacy/       the August 2026 bot, layout-v1 tests and anchors
 ```

@@ -7,6 +7,9 @@ Start with the Options screen open (grid menu -> Options).
   venv/bin/python -I scripts/set_options.py --restore  # back to the originals
   venv/bin/python -I scripts/set_options.py --check    # report only, no presses
 
+Layout v2 (the game's native 720x1280 layout since 2026-11-01). The v1
+version is in git history.
+
 Each row is found by its label (template cut from a reference screenshot),
 the checkbox state is read from pixels, and after a press exactly that one
 checkbox must have flipped, or the script stops. Original values are recorded
@@ -29,30 +32,35 @@ from obelisk.device import Device  # noqa: E402
 
 SCREENS = ROOT / "screens"
 SHOTS = SCREENS / "settings"
-TABS = {"gameplay": 315, "display": 403, "menus": 579}
-LIST_TOP, LIST_BOTTOM = 240, 965
-CHECK_X = 121
+TABS = {"gameplay": 307, "display": 411, "menus": 619}
+TAB_Y = 120
+LIST_TOP, LIST_BOTTOM = 165, 1030
+CHECK_X = 79          # checkbox centre (box x 61-97, orange border at x 62)
+BORDER_X = 62
+INNER_X = (68, 91)
+LABEL_X = (135, 620)
+DRAG_X = 700          # right of the rows (they end at x 655)
 
 # (tab, label, reference screenshot, row y in it, original, bot value)
 OPTIONS = [
-    ("gameplay", "Remove Lootbug Gem confirmation", "33_opt_gameplay_0.png", 610, True, False),
-    ("display", "Disable Ore Damage Popups", "32_options_display.png", 316, False, True),
-    ("display", "Disable Bomb-Bag/Drone Pause tooltips", "32_options_display.png", 406, False, True),
-    ("display", "Hide Void Portal Resource Gain Popups", "32_options_display.png", 452, False, True),
-    ("display", "Hide Coal Full Popup", "32_options_display.png", 497, False, True),
-    ("display", "Make Pets Invisible", "32_options_display.png", 927, False, True),
-    ("display", "Minimize Mining Effects To Stop Flashing", "32_options_display_s2.png", 504, False, True),
-    ("display", "Hide Golden Floor Effects", "32_options_display_s2.png", 685, False, True),
-    ("display", "Hide Rainbow Floor Effects", "32_options_display_s2.png", 730, False, True),
-    ("display", "Hide All Vein Effects", "32_options_display_s2.png", 775, False, True),
-    ("display", "Disable Drone radius display", "32_options_display_s2.png", 911, False, True),
-    ("menus", "Make Drones Invisible", "33_opt_menus_0.png", 361, False, True),
+    ("gameplay", "Remove Lootbug Gem confirmation", "n71_opt_gameplay.png", 605, True, False),
+    ("display", "Disable Ore Damage Popups", "n71_opt_display.png", 258, False, True),
+    ("display", "Disable Bomb-Bag/Drone Pause tooltips", "n71_opt_display.png", 365, False, True),
+    ("display", "Hide Void Portal Resource Gain Popups", "n71_opt_display.png", 418, False, True),
+    ("display", "Hide Coal Full Popup", "n71_opt_display.png", 472, False, True),
+    ("display", "Make Pets Invisible", "n71_opt_display.png", 978, False, True),
+    ("display", "Minimize Mining Effects To Stop Flashing", "n71_opt_display_2.png", 485, False, True),
+    ("display", "Hide Golden Floor Effects", "n71_opt_display_2.png", 698, False, True),
+    ("display", "Hide Rainbow Floor Effects", "n71_opt_display_2.png", 752, False, True),
+    ("display", "Hide All Vein Effects", "n71_opt_display_2.png", 805, False, True),
+    ("display", "Disable Drone radius display", "n71_opt_display_2.png", 965, False, True),
+    ("menus", "Make Drones Invisible", "n84_opt_menus.png", 312, False, True),
 ]
 
 
 def checkboxes(img) -> list[tuple[int, bool]]:
-    """[(y_center, checked)] for the checkbox column (orange border, x 105-135)."""
-    col = img[:, 106].astype(int)
+    """[(y_center, checked)] for the checkbox column (orange border at BORDER_X)."""
+    col = img[:, BORDER_X].astype(int)
     orange = (np.abs(col[:, 2] - 240) < 30) & (col[:, 1] > 130) & (col[:, 0] < 90)
     rows, start = [], None
     for y in range(LIST_TOP, LIST_BOTTOM):
@@ -64,18 +72,18 @@ def checkboxes(img) -> list[tuple[int, bool]]:
             start = None
     out = []
     for a, b in rows:
-        inner = img[a + 6:b - 6, 112:131]
+        inner = img[a + 6:b - 6, INNER_X[0]:INNER_X[1]]
         out.append(((a + b) // 2, bool((inner.min(axis=2) > 200).mean() > 0.08)))
     return out
 
 
 def label_template(src: str, y: int) -> np.ndarray:
     img = cv2.imread(str(SCREENS / src))
-    return img[y - 11:y + 11, 170:600]
+    return img[y - 12:y + 12, LABEL_X[0]:LABEL_X[1]]
 
 
 def find_label(frame, tpl) -> int | None:
-    region = frame[LIST_TOP:LIST_BOTTOM, 150:620]
+    region = frame[LIST_TOP:LIST_BOTTOM, LABEL_X[0] - 20:LABEL_X[1] + 40]
     res = cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED)
     _, best, _, (_, by) = cv2.minMaxLoc(res)
     return LIST_TOP + by + tpl.shape[0] // 2 if best >= 0.9 else None
@@ -99,10 +107,10 @@ def main() -> None:
     SHOTS.mkdir(parents=True, exist_ok=True)
     for i, (tab, label, src, ref_y, original, bot) in enumerate(OPTIONS):
         want = original if args.restore else bot
-        dev.press(TABS[tab], 198)
+        dev.press(TABS[tab], TAB_Y)
         time.sleep(1.2)
         for _ in range(4):                       # tabs keep their scroll; go to top
-            dev.swipe(660, 400, 660, 900, 300)
+            dev.swipe(DRAG_X, 400, DRAG_X, 1000, 300)
         time.sleep(1.0)
         tpl = label_template(src, ref_y)
         frame, y = dev.capture(), None
@@ -110,7 +118,7 @@ def main() -> None:
             y = find_label(frame, tpl)
             if y is not None:
                 break
-            dev.swipe(660, 900, 660, 400, 600)   # scroll right of the rows
+            dev.swipe(DRAG_X, 1000, DRAG_X, 450, 600)   # scroll right of the rows
             time.sleep(1.0)
             frame = dev.capture()
         if y is None:
