@@ -62,8 +62,9 @@ def _post(title: str, message: str, priority: str, tags: str, image=None) -> Non
         import cv2                                  # attach a small JPEG of the screenshot
         img = cv2.imread(str(image))
         if img is not None:
-            img = cv2.resize(img, (360, int(img.shape[0] * 360 / img.shape[1])),
-                             interpolation=cv2.INTER_AREA)
+            if img.shape[1] > 720:          # health pictures are 720 wide: keep text readable
+                img = cv2.resize(img, (720, int(img.shape[0] * 720 / img.shape[1])),
+                                 interpolation=cv2.INTER_AREA)
             ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ok:
                 data = buf.tobytes()

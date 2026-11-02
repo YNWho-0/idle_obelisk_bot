@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import time
 
-from .notify import alert
+from .notify import alert as _alert
 
 log = logging.getLogger("obelisk.outage")
 
@@ -44,15 +44,27 @@ def _fmt(seconds: float) -> str:
 
 
 def report_down(title: str, error: BaseException | str, state=None, now: float | None = None,
-                sender=None) -> bool:
+                sender=None, image_fn=None) -> bool:
     """Record a failure that is about to end the process. Returns True if the bot
-    should give up (caller exits with EXIT_GAVE_UP instead of re-raising)."""
+    should give up (caller exits with EXIT_GAVE_UP instead of re-raising).
+    image_fn() -> (picture path, verdict text) is only called when an alert is
+    actually sent (it takes a few seconds: see health.py)."""
     state = _state(state)
     now = time.time() if now is None else now
     kw = {"state": state, "force": True}
     if sender is not None:
         kw["sender"] = sender
     err = f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
+
+    def alert(key, title, message, **more):         # attach the health picture + verdict
+        if image_fn is not None:
+            try:
+                path, verdict = image_fn()
+                more["image"], message = path, f"{verdict} {message}"
+            except Exception as e:                    # never let this block the alert
+                log.warning("health picture failed: %s", e)
+        return _alert(key, title, message, **more)
+
     o = state.get("outage") or {}
     if not o or now - o.get("last_fail", 0) > NEW_OUTAGE_GAP:
         state.set("outage", {"since": now, "last_fail": now, "reminders": 0})
@@ -90,6 +102,6 @@ def report_up(state=None, now: float | None = None, sender=None) -> bool:
     kw = {"state": state, "force": True}
     if sender is not None:
         kw["sender"] = sender
-    alert("outage_over", "Obelisk bot OK again",
-          f"Back to normal after {_fmt(now - o['since'])} down.", tags="white_check_mark", **kw)
+    _alert("outage_over", "Obelisk bot OK again",
+           f"Back to normal after {_fmt(now - o['since'])} down.", tags="white_check_mark", **kw)
     return True

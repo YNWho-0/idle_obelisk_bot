@@ -560,6 +560,50 @@ def test_capture_timeout_nudges_host_and_retries():
         d.nudge_host_display, d.time.sleep = orig_nudge, orig_sleep
 
 
+def test_health_verdicts():
+    import obelisk.device as d
+    import obelisk.health as hl
+    desk = np.zeros((839, 1706, 3), np.uint8)
+    running = lambda: {"Session": "RUNNING", "Container": "RUNNING"}
+
+    class Dev:
+        serial = "x"
+        def __init__(self, frozen=False):
+            self.frozen = frozen
+        def capture(self):
+            if self.frozen:
+                raise d.DeviceError("timeout: adb exec-out screencap")
+            return FRAMES["mining_bugs"]
+        def game_in_front(self):
+            return True
+
+    adb_ok = lambda: (True, "device")
+    cases = [   # (dev, grab, waydroid, adb) -> level
+        (Dev(), lambda: desk, running, adb_ok, hl.OK),
+        (Dev(frozen=True), lambda: desk, running, adb_ok, hl.RESTART),     # 2026-11-02
+        (Dev(), lambda: desk, lambda: {"Session": "STOPPED", "Container": "RUNNING"}, adb_ok, hl.RESTART),
+        (Dev(), lambda: desk, running, lambda: (False, "offline"), hl.RESTART),
+        (Dev(), lambda: None, running, adb_ok, hl.REBOOT),
+    ]
+    for dev, grab, wd, adb, level in cases:
+        h = hl.check(dev, grab=grab, wd_status=wd, adb_state=adb)
+        assert h.level == level, (h.level, level, h.checks)
+        img = hl.render(h)                       # renders with or without pictures
+        assert img.shape[1] == 720
+
+
+def test_outage_alert_carries_health_picture():
+    import obelisk.outage as out
+    st = _jobs.State(_TMP / "outage_state2.json")
+    sent = []
+    snd = lambda title, msg, prio, tags, image=None: sent.append((title, msg, image))
+    calls = []
+    fn = lambda: calls.append(1) or ("/tmp/h.png", "REBOOT THE PI - x.")
+    out.report_down("crashed", "E", st, 1000.0, snd, image_fn=fn)
+    out.report_down("crashed", "E", st, 1060.0, snd, image_fn=fn)   # quiet retry: no picture taken
+    assert len(calls) == 1 and sent[0][2] == "/tmp/h.png" and sent[0][1].startswith("REBOOT THE PI")
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

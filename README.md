@@ -96,6 +96,12 @@ If screencap hangs, the bot first screenshots the Pi's own desktop (`grim`)
 to wake it: with no monitor attached, the desktop once stopped showing the
 game for 3 h until a VNC viewer connected. If the bot still gave up, connect
 with VNC, then `systemctl --user restart obelisk-bot`.
+Every crash/outage alert carries a health picture (`obelisk/health.py`,
+also `venv/bin/python -m obelisk health` or the dashboard's "Check health
+now"): a banner saying NO REBOOT NEEDED / RESTART WAYDROID + BOT / REBOOT
+THE PI, five checks (Pi desktop, Waydroid, adb, Android screen, game), the
+Android screen and the Pi desktop. Latest in `logs/health.png`; alert copies
+in `logs/failures/*_health_*.png`.
 The dashboard's Restart card does the same from a phone: restart the bot,
 restart Waydroid + game + bot (`scripts/restart_all.sh`, progress in
 `logs/restart.log`), or reboot the Pi.

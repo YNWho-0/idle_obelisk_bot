@@ -94,6 +94,8 @@ def service_state(unit: str = "obelisk-bot") -> str:
 RESTART_UNIT = "obelisk-restart"
 RESTART_LOG = LOGS / "restart.log"
 RESTART_SCRIPT = ROOT / "scripts" / "restart_all.sh"
+HEALTH_UNIT = "obelisk-health"
+HEALTH_PNG = LOGS / "health.png"
 
 
 def restart_log(n: int = 6) -> list[str]:
@@ -110,6 +112,12 @@ def start_restart(what: str, run=subprocess.run) -> str | None:
         with RESTART_LOG.open("a") as f:
             f.write(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S} reboot: requested from dashboard\n")
         cmd = ["systemctl", "reboot"]
+    elif what == "health":
+        if service_state(HEALTH_UNIT) in ("active", "activating"):
+            return "a health check is already running"
+        cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit={HEALTH_UNIT}",
+               f"--working-directory={ROOT}", str(ROOT / "venv" / "bin" / "python"),
+               "-m", "obelisk", "health"]
     elif what in ("bot", "all"):
         if service_state(RESTART_UNIT) in ("active", "activating"):
             return "a restart is already running"
@@ -187,6 +195,9 @@ def collect() -> dict:
         "session_now": st.get("session_now"),
         "restart_running": service_state(RESTART_UNIT) in ("active", "activating"),
         "restart_log": restart_log(),
+        "health_running": service_state(HEALTH_UNIT) in ("active", "activating"),
+        "health_mtime": (dt.datetime.fromtimestamp(HEALTH_PNG.stat().st_mtime)
+                         if HEALTH_PNG.exists() else None),
         "latest_mtime": (dt.datetime.fromtimestamp((LOGS / "latest.jpg").stat().st_mtime)
                          if (LOGS / "latest.jpg").exists() else None),
     }
@@ -274,7 +285,12 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin
 </div>
 
 <div class="card">
- <h2>Restart</h2>
+ <h2>Health &amp; restart</h2>
+ <form method="post" action="restart" class="ctl">
+  <button name="a" value="health" {{ 'disabled' if d.health_running }}>{{ 'Checking… (refresh in ~30 s)' if d.health_running else 'Check health now' }}</button>
+ </form>
+ {% if d.health_mtime %}<a href="health.png"><img class="shot" src="health.png?v={{ d.health_mtime.timestamp()|int }}" alt="health check picture"></a>
+ <div class="sub" style="text-align:center;margin:6px 0 10px">health check {{ d.health_mtime.strftime('%a %H:%M') }} · the banner says whether to reboot</div>{% endif %}
  {% if err %}<p style="color:var(--bad);margin:0 0 8px">Restart failed: {{ err }}</p>{% endif %}
  <form method="post" action="restart" class="ctl">
   <button name="a" value="bot" {{ 'disabled' if d.restart_running }}
@@ -390,6 +406,13 @@ def create_app() -> Flask:
         if not p.exists():
             abort(404)
         return Response(p.read_bytes(), mimetype="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/health.png")
+    def health_png():
+        if not HEALTH_PNG.exists():
+            abort(404)
+        return Response(HEALTH_PNG.read_bytes(), mimetype="image/png",
                         headers={"Cache-Control": "no-store"})
 
     @app.get("/fail/<name>")

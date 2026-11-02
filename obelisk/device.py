@@ -138,22 +138,29 @@ class Device:
         time.sleep(seconds)
 
 
-def nudge_host_display() -> bool:
-    """Take (and discard) a screenshot of the Pi's own Wayland desktop, which
-    makes the compositor render a frame. Never raises; True if it worked."""
+def grab_host_display(timeout: float = 10) -> "np.ndarray | None":
+    """Screenshot of the Pi's own Wayland desktop (what VNC shows) as BGR, or
+    None if the desktop doesn't answer. Taking it also makes the compositor
+    render a frame. Never raises."""
     env = dict(os.environ)
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     env.setdefault("WAYLAND_DISPLAY", "wayland-0")
     try:
-        res = subprocess.run(["grim", "-l", "0", "-"], env=env, timeout=10,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        res = subprocess.run(["grim", "-l", "0", "-"], env=env, timeout=timeout,
+                             capture_output=True)
     except (OSError, subprocess.TimeoutExpired) as e:
-        log.warning("host display nudge failed: %s", e)
-        return False
+        log.warning("host display grab failed: %s", e)
+        return None
     if res.returncode != 0:
-        log.warning("host display nudge failed: %s", res.stderr.decode(errors="replace").strip())
-        return False
-    return True
+        log.warning("host display grab failed: %s", res.stderr.decode(errors="replace").strip())
+        return None
+    img = cv2.imdecode(np.frombuffer(res.stdout, np.uint8), cv2.IMREAD_COLOR)
+    return img
+
+
+def nudge_host_display() -> bool:
+    """Make the host compositor render a frame (see Device.capture). True if it answered."""
+    return grab_host_display() is not None
 
 
 def decode_raw(raw: bytes) -> np.ndarray:

@@ -78,6 +78,7 @@ def main() -> None:
     cg.add_argument("--conflict", metavar="REASON", help="mark a conflict by hand")
     nt = sub.add_parser("notify-test", help="send a test alert to the phone")
     sub.add_parser("bootcheck", help="post-boot health check, result sent to the phone")
+    sub.add_parser("health", help="Pi/Waydroid/Android health picture -> logs/health.png (no input)")
     db = sub.add_parser("dashboard", help="read-only phone dashboard (Flask)")
     db.add_argument("--host", default="0.0.0.0")
     db.add_argument("--port", type=int)
@@ -90,6 +91,13 @@ def main() -> None:
     sm.add_argument("--write", action="store_true", help="also save to logs/daily/<date>.txt")
     args = ap.parse_args()
 
+    if args.cmd == "health":
+        from .health import run as health_run
+        setup_logging()
+        path, h = health_run()
+        print(h.summary())
+        print(f"picture: {path}")
+        return
     if args.cmd == "bootcheck":
         from .bootcheck import run
         run()
@@ -165,7 +173,7 @@ def main() -> None:
         try:
             dev.ensure_resolution()  # re-applies wm size if Waydroid lost it
         except Exception as e:
-            _report_down("Obelisk bot can't start", e)
+            _report_down("Obelisk bot can't start", e, dev)
             raise
     else:
         dev.check_resolution()
@@ -189,18 +197,23 @@ def main() -> None:
                       poll=3.0, planner=planner,
                       cloud=None if planner is None else CloudSync()).run_forever()
         except Exception as e:
-            _report_down("Obelisk bot crashed", e)
+            _report_down("Obelisk bot crashed", e, dev)
             raise
 
 
-def _report_down(title: str, e: Exception) -> None:
+def _report_down(title: str, e: Exception, dev) -> None:
     """Alert/track the outage; exits with code 3 (no more systemd restarts)
-    once it has lasted too long. Silent while still booting (bootcheck reports)."""
+    once it has lasted too long. Silent while still booting (bootcheck reports).
+    Each alert carries a health picture saying whether to reboot the Pi."""
     from .bootcheck import uptime_s
     from .outage import EXIT_GAVE_UP, report_down
     if uptime_s() < 600:
         return
-    if report_down(title, e):
+    def health_picture():
+        from .health import run as health_run
+        path, h = health_run(dev, copy_to_failures=True)
+        return path, h.summary()
+    if report_down(title, e, image_fn=health_picture):
         logging.getLogger("obelisk").error("giving up: %s: %s", type(e).__name__, e)
         sys.exit(EXIT_GAVE_UP)
 
