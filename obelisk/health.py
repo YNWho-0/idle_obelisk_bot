@@ -47,6 +47,7 @@ class Health:
     checks: list = field(default_factory=list)      # (name, ok, detail)
     level: str = OK
     reason: str = ""
+    stopped: bool = False          # the bot stopped itself (exit 3): it won't retry
     android: "np.ndarray | None" = None
     desktop: "np.ndarray | None" = None
     when: dt.datetime = field(default_factory=dt.datetime.now)
@@ -57,6 +58,8 @@ class Health:
 
     @property
     def advice(self) -> str:
+        if self.level == OK and self.stopped:
+            return "Pi + Android fine: a game problem. See failure shots, then Restart bot."
         return VERDICTS[self.level][2]
 
     def summary(self) -> str:
@@ -161,7 +164,8 @@ def render(h: Health) -> np.ndarray:
                        desk.shape[0] if desk is not None else 190)
     img = np.full((top + shots_h + 12, W, 3), 28, np.uint8)
 
-    colour, headline, advice = VERDICTS[h.level]
+    colour, headline, _ = VERDICTS[h.level]
+    advice = h.advice
     cv2.rectangle(img, (0, 0), (W, 110), colour, -1)
     _text(img, headline, 16, 48, 1.15, (255, 255, 255), 3)
     _text(img, advice, 16, 88, 0.52, (255, 255, 255), 1)
@@ -191,9 +195,30 @@ def render(h: Health) -> np.ndarray:
     return img
 
 
-def run(dev: "Device | None" = None, copy_to_failures: bool = False) -> tuple[Path, Health]:
-    """Check, render, save logs/health.png (and a copy in logs/failures/)."""
+def alert_if_unhealthy(path: Path, h: Health, state=None) -> bool:
+    """For the periodic check (obelisk-health.timer, every 50 min): catch a
+    frozen display etc. between sessions, before the bot trips over it. Quiet
+    while booting (bootcheck reports) and during an outage the bot is already
+    reporting; each verdict is sent at most once per 6 h."""
+    from .bootcheck import uptime_s
+    from .notify import alert
+    if h.level == OK or uptime_s() < 900:
+        return False
+    if state is None:
+        from .jobs import State
+        state = State()
+    if state.get("outage"):
+        return False
+    return alert(f"health_{h.level}", f"Obelisk: {h.headline.lower()}", h.summary(),
+                 priority="high", tags="warning", state=state, image=path)
+
+
+def run(dev: "Device | None" = None, copy_to_failures: bool = False,
+        stopped: bool = False) -> tuple[Path, Health]:
+    """Check, render, save logs/health.png (and a copy in logs/failures/).
+    stopped=True: the bot has stopped itself, so "retries by itself" is wrong."""
     h = check(dev)
+    h.stopped = stopped
     img = render(h)
     LATEST.parent.mkdir(parents=True, exist_ok=True)
     tmp = LATEST.with_suffix(".tmp.png")

@@ -8,6 +8,8 @@ import datetime as dt
 import subprocess
 from pathlib import Path
 
+from . import ADB_SERIAL
+
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs"
 
@@ -47,7 +49,7 @@ def check() -> tuple[bool, list[str]]:
     lines.append(f"{'OK ' if session else 'BAD'} waydroid session: "
                  f"{'running' if session else 'NOT running (autostart missing?)'}")
 
-    size = _run("adb", "-s", "192.168.240.112:5555", "shell", "wm", "size")
+    size = _run("adb", "-s", ADB_SERIAL, "shell", "wm", "size")
     good = "720x1280" in size
     ok &= good
     lines.append(f"{'OK ' if good else 'BAD'} adb + screen size: "

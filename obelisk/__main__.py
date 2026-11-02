@@ -24,7 +24,7 @@ from . import screens
 from .device import Device
 from .jobs import (CloudSync, FounderJob, FreebieJob, JobAborted, LootbugJob, LootbugPopupInterrupt,
                    AnrInterrupt, MenuCloseInterrupt,
-                   NotificationInterrupt, OfflineGainsInterrupt, save_failure)
+                   OfflineGainsInterrupt, save_failure)
 from .session import SessionPlanner
 from .scheduler import Scheduler
 
@@ -78,7 +78,9 @@ def main() -> None:
     cg.add_argument("--conflict", metavar="REASON", help="mark a conflict by hand")
     nt = sub.add_parser("notify-test", help="send a test alert to the phone")
     sub.add_parser("bootcheck", help="post-boot health check, result sent to the phone")
-    sub.add_parser("health", help="Pi/Waydroid/Android health picture -> logs/health.png (no input)")
+    hp = sub.add_parser("health", help="Pi/Waydroid/Android health picture -> logs/health.png (no input)")
+    hp.add_argument("--alert", action="store_true",
+                    help="send a phone alert if it isn't healthy (obelisk-health.timer)")
     db = sub.add_parser("dashboard", help="read-only phone dashboard (Flask)")
     db.add_argument("--host", default="0.0.0.0")
     db.add_argument("--port", type=int)
@@ -97,6 +99,9 @@ def main() -> None:
         path, h = health_run()
         print(h.summary())
         print(f"picture: {path}")
+        if args.alert:
+            from .health import alert_if_unhealthy
+            alert_if_unhealthy(path, h)
         return
     if args.cmd == "bootcheck":
         from .bootcheck import run
@@ -170,6 +175,7 @@ def main() -> None:
     setup_logging()
     dev = Device(dry_run=getattr(args, "dry_run", False))
     if args.cmd == "run":
+        dev.connect()
         try:
             dev.ensure_resolution()  # re-applies wm size if Waydroid lost it
         except Exception as e:
@@ -188,12 +194,12 @@ def main() -> None:
         logging.getLogger("obelisk").info("bot started")
         # priority order: the founder crate can vanish; lootbugs/freebies bank up
         founder = FounderJob()
-        planner = None if args.always_open else SessionPlanner(founder)
+        planner = None if args.always_open else SessionPlanner()
         logging.getLogger("obelisk").info(
             "mode: %s", "always open" if planner is None else "a short session every 50 min, game in background between")
         try:
             Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
-                      interrupts=[AnrInterrupt(), OfflineGainsInterrupt(), LootbugPopupInterrupt(), MenuCloseInterrupt()],   # NotificationInterrupt: v1 only
+                      interrupts=[AnrInterrupt(), OfflineGainsInterrupt(), LootbugPopupInterrupt(), MenuCloseInterrupt()],
                       poll=3.0, planner=planner,
                       cloud=None if planner is None else CloudSync()).run_forever()
         except Exception as e:

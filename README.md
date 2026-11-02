@@ -89,7 +89,10 @@ tail -f logs/obelisk.log                     # every press is logged
 venv/bin/python -m obelisk summary           # today so far; nightly reports in logs/daily/
 ```
 
-A bot that stopped itself (3 failed jobs, or the gem guard) exits with code 3
+Jobs wait up to 3 s for the mining screen (the game's own toasts hide it
+briefly) before counting a failure. A bot that stopped itself (3 failures in
+a row within one session, a failure in 3 sessions in a row, or the gem
+guard) exits with code 3
 and is NOT restarted; check `logs/failures/` first. Crashes (adb, Waydroid
 down) retry every 60 s; after 2 h of failing it also exits with code 3.
 If screencap hangs, the bot first screenshots the Pi's own desktop (`grim`)
@@ -101,7 +104,10 @@ also `venv/bin/python -m obelisk health` or the dashboard's "Check health
 now"): a banner saying NO REBOOT NEEDED / RESTART WAYDROID + BOT / REBOOT
 THE PI, five checks (Pi desktop, Waydroid, adb, Android screen, game), the
 Android screen and the Pi desktop. Latest in `logs/health.png`; alert copies
-in `logs/failures/*_health_*.png`.
+in `logs/failures/*_health_*.png`. `obelisk-health.timer` runs the
+check every 50 min and alerts only if something is unhealthy (install:
+`systemctl --user link` both `systemd/obelisk-health.*` files, then
+`systemctl --user enable --now obelisk-health.timer`).
 The dashboard's Restart card does the same from a phone: restart the bot,
 restart Waydroid + game + bot (`scripts/restart_all.sh`, progress in
 `logs/restart.log`), or reboot the Pi.

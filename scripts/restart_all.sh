@@ -6,7 +6,8 @@
 # Progress goes to logs/restart.log (shown on the dashboard).
 
 LOG="$HOME/idle_obelisk_bot/logs/restart.log"
-ADB_SERIAL=192.168.240.112:5555
+BOT="$HOME/idle_obelisk_bot"
+ADB_SERIAL=$(cd "$BOT" && venv/bin/python -c 'from obelisk import ADB_SERIAL; print(ADB_SERIAL)')
 mkdir -p "$(dirname "$LOG")"
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 

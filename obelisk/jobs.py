@@ -40,6 +40,27 @@ def wait_for(dev, pred: Callable[[np.ndarray], object], timeout: float,
         dev.sleep(interval)
 
 
+MINING_WAIT = 3.0   # s; the game's own toasts ("Free bomb") hide anchors for ~1-2 s
+
+
+def ensure_mining(dev, what: str = "", timeout: float = MINING_WAIT) -> np.ndarray:
+    """Fresh frame of the mining screen, waiting out brief overlays; aborts
+    (with the last frame) if it doesn't show up within `timeout`."""
+    frame = wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=timeout, interval=0.5)
+    if frame is None:
+        raise JobAborted(f"{what}not on mining screen", dev.capture())
+    return frame
+
+
+def press_anchor(dev, name: str, frame: np.ndarray) -> None:
+    """Press anchor `name` as matched on `frame`; a missing anchor aborts the
+    job (with a screenshot) instead of crashing the bot."""
+    m = A.get(name).find(frame)
+    if m is None:
+        raise JobAborted(f"button '{name}' not found", frame)
+    dev.press(*m.center)
+
+
 def save_failure(frame: Optional[np.ndarray], reason: str) -> Optional[Path]:
     if frame is None:
         return None
@@ -70,11 +91,11 @@ class FreebieJob:
     def run(self, dev) -> str:
         """Returns 'claimed' or 'nothing'; raises JobAborted otherwise."""
         self.last_run = time.monotonic()
-        frame = dev.capture()
-        if screens.identify(frame) != MINING:
-            raise JobAborted("not on mining screen", frame)
+        frame = ensure_mining(dev)
 
         icon = screens.store_button(frame)
+        if icon is None:
+            raise JobAborted("store button not found", frame)
         dev.press(*icon.center)
         frame = wait_for(dev, lambda f: screens.identify(f) == STORE, timeout=6)
         if frame is None:
@@ -130,7 +151,7 @@ def close_store(dev) -> None:
     frame = dev.capture()
     if screens.identify(frame) != STORE:
         raise JobAborted("expected store before closing", frame)
-    dev.press(*A.get("store_close").find(frame).center)
+    press_anchor(dev, "store_close", frame)
     if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
         raise JobAborted("store did not close", dev.capture())
 
@@ -160,9 +181,7 @@ class LootbugJob:
 
     def run(self, dev) -> str:
         self.last_run = time.monotonic()
-        frame = dev.capture()
-        if screens.identify(frame) != MINING:
-            raise JobAborted("not on mining screen", frame)
+        frame = ensure_mining(dev)
         bug = screens.lootbug_sprite(frame)
         if bug is None:
             return "none"
@@ -180,7 +199,7 @@ def close_lootbug_popup(dev) -> None:
     frame = dev.capture()
     if screens.identify(frame) != LOOTBUG_POPUP:
         raise JobAborted("expected lootbug popup before closing", frame)
-    dev.press(*A.get("lootbug_close").find(frame).center)
+    press_anchor(dev, "lootbug_close", frame)
     if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
         raise JobAborted("lootbug popup did not close", dev.capture())
 
@@ -212,35 +231,20 @@ class FounderJob:
 
     name = "founder"
     MIN_GAP = 10
-    PERIOD = 3600
-    WINDOW = (-120, 300)    # seconds around the expected drop
-    FALLBACK = 60
 
     def __init__(self, state: "State | None" = None, clock=time.time):
         self.last_run = float("-inf")
-        self.last_look = float("-inf")
         self.state = state if state is not None else State()
         self.clock = clock
-
-    def in_window(self, t: float) -> bool:
-        """Always look. The drop cycle is NOT anchored to claims (the Store
-        countdown read 28:48 right after a claim) and the crate waits on the
-        field, so there is no window to predict; sessions are short anyway."""
-        return True
 
     def due(self, now: float, frame: np.ndarray) -> bool:
         if now - self.last_run < self.MIN_GAP:
             return False
-        if not self.in_window(self.clock()) and now - self.last_look < self.FALLBACK:
-            return False
-        self.last_look = now
         return screens.founder_crate(frame) is not None
 
     def run(self, dev) -> str:
         self.last_run = time.monotonic()
-        frame = dev.capture()
-        if screens.identify(frame) != MINING:
-            raise JobAborted("not on mining screen", frame)
+        frame = ensure_mining(dev)
         crate = screens.founder_crate(frame)
         if crate is None:
             return "none"
@@ -287,34 +291,6 @@ class State:
             log.warning("could not save state: %s", e)
 
 
-class NotificationInterrupt:
-    """Dismiss left-side notification toasts (they can hide the first lootbug
-    spot) by pressing them; verified by the box disappearing. Backs off for
-    10 min if a press doesn't dismiss it."""
-
-    MIN_GAP = 60
-    BACKOFF = 600
-
-    def __init__(self):
-        self.next_ok = float("-inf")
-
-    def handle(self, dev, frame: np.ndarray) -> bool:
-        now = time.monotonic()
-        if now < self.next_ok or screens.identify(frame) != MINING:
-            return False
-        box = screens.notification_box(frame)
-        if box is None:
-            return False
-        self.next_ok = now + self.MIN_GAP
-        y = (box[0] + box[1]) // 2
-        log.info("interrupt: dismissing notification at y %d-%d", *box)
-        dev.press(100, y)
-        if wait_for(dev, lambda f: screens.notification_box(f) is None, timeout=3) is None:
-            log.warning("notification still shown after press; backing off %d s", self.BACKOFF)
-            self.next_ok = now + self.BACKOFF
-        return True
-
-
 class OfflineGainsInterrupt:
     """After the game returns from the background it shows "Offline Gains":
     first an options screen (press Confirm; the Buffs/Drone-fuel checkboxes are
@@ -324,13 +300,13 @@ class OfflineGainsInterrupt:
         screen = screens.identify(frame)
         if screen == OFFLINE_OPTIONS:
             log.info("interrupt: offline gains options -> Confirm")
-            dev.press(*A.get("offline_confirm").find(frame).center)
+            press_anchor(dev, "offline_confirm", frame)
             if wait_for(dev, lambda f: screens.identify(f) != OFFLINE_OPTIONS, timeout=5) is None:
                 save_failure(dev.capture(), "offline_confirm_stuck")
             return True
         if screen == OFFLINE_RESULTS:
             log.info("interrupt: offline gains results -> Close")
-            dev.press(*A.get("offline_close").find(frame).center)
+            press_anchor(dev, "offline_close", frame)
             if wait_for(dev, lambda f: screens.identify(f) != OFFLINE_RESULTS, timeout=5) is None:
                 save_failure(dev.capture(), "offline_close_stuck")
             return True
@@ -363,14 +339,12 @@ class CloudSync:
         return self._visit(dev, upload=True)
 
     def _visit(self, dev, upload: bool) -> str:
-        frame = dev.capture()
-        if screens.identify(frame) != MINING:
-            raise JobAborted("cloud: not on mining screen", frame)
-        dev.press(*A.get("grid_button").find(frame).center)
+        frame = ensure_mining(dev, "cloud: ")
+        press_anchor(dev, "grid_button", frame)
         frame = wait_for(dev, lambda f: screens.identify(f) == GRID_MENU, timeout=5)
         if frame is None:
             raise JobAborted("cloud: grid menu did not open", dev.capture())
-        dev.press(*A.get("grid_cloud_button").find(frame).center)
+        press_anchor(dev, "grid_cloud_button", frame)
         frame = wait_for(dev, lambda f: screens.identify(f) == CLOUD, timeout=6)
         if frame is None:
             raise JobAborted("cloud: Cloud screen did not open", dev.capture())
@@ -487,7 +461,7 @@ class CloudSync:
         if frame is None:
             raise JobAborted("cloud: screen not recognised when closing", dev.capture())
         if screens.identify(frame) in (CLOUD, GRID_MENU):
-            dev.press(*A.get("store_close").find(frame).center)
+            press_anchor(dev, "store_close", frame)
             if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
                 raise JobAborted("cloud: could not get back to the mining screen", dev.capture())
 
@@ -531,6 +505,6 @@ class AnrInterrupt:
         if screens.identify(frame) != screens.ANR:
             return False
         log.warning("interrupt: Android 'isn't responding' dialog -> Wait")
-        dev.press(*A.get("anr_wait").find(frame).center)
+        press_anchor(dev, "anr_wait", frame)
         wait_for(dev, lambda f: screens.identify(f) != screens.ANR, timeout=5)
         return True

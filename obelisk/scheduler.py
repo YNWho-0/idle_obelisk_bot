@@ -26,6 +26,11 @@ from .jobs import JobAborted, save_failure, wait_for
 # systemd unit must NOT restart on it (RestartPreventExitStatus=3).
 EXIT_TOO_MANY_FAILURES = 3
 
+# Screens that mean "the game is up" after a (re)launch; popups on them are
+# handled by the interrupts.
+GAME_READY = (screens.MINING, screens.OFFLINE_OPTIONS, screens.OFFLINE_RESULTS,
+              screens.LOOTBUG_POPUP, screens.ANR)
+
 log = logging.getLogger("obelisk.scheduler")
 
 
@@ -46,8 +51,15 @@ def save_latest(dev) -> None:
 
 
 class Scheduler:
+    """Failure policy: a JobAborted counts as a failure. The bot stops (exit 3,
+    systemd won't restart it) after `max_failures` failures in a row within
+    one session, or when MAX_FAILED_SESSIONS sessions in a row each had a
+    failure. A one-off glitch in sessions hours apart never stops it (it once
+    did, on 2026-11-01). The gem guard stops at once."""
+
     FOREGROUND_EVERY = 60      # seconds between "is the game in front?" checks
     LAUNCH_WAIT = 90           # seconds to wait for the mining screen after a relaunch
+    MAX_FAILED_SESSIONS = 3
 
     def __init__(self, dev, jobs, interrupts=(), poll: float = 2.0,
                  max_unknown: int = 15, max_failures: int = 3, planner=None, cloud=None):
@@ -58,7 +70,9 @@ class Scheduler:
         self.max_unknown = max_unknown
         self.max_failures = max_failures
         self.unknown = 0
-        self.failures = 0
+        self.failures = 0               # failures in a row (this session)
+        self.session_failed = False
+        self.failed_sessions = 0        # sessions in a row that had a failure
         self.last_foreground_check = float("-inf")
         self.planner = planner          # SessionPlanner, or None = game always open
         self.last_frame = None
@@ -121,6 +135,7 @@ class Scheduler:
     def begin_session(self) -> None:
         self.planner.start()
         self.session_t0 = time.monotonic()
+        self.failures, self.session_failed = 0, False
         log.info("session start")
         for job in self.jobs:                 # banked while offline: look right away
             if job.name == "freebie":
@@ -155,7 +170,7 @@ class Scheduler:
         stable = 0
         while time.monotonic() < deadline:
             frame = self.dev.capture()
-            if any(h.handle(self.dev, frame) for h in self.interrupts):
+            if self.handle_interrupts(frame):
                 stable = 0
                 continue
             stable = stable + 1 if screens.identify(frame) == screens.MINING else 0
@@ -167,6 +182,7 @@ class Scheduler:
     def session_complete(self, now: float) -> bool:
         p = self.planner
         if p.timed_out(now):
+            self.session_failed = True
             log.warning("session hit the %d s limit", p.MAX_SESSION)
             shot = save_failure(self.last_frame, "session_timeout")
             alert("session_timeout", "Obelisk bot: a session couldn't finish",
@@ -174,7 +190,7 @@ class Scheduler:
                   "Possibly a new popup or a game update; screenshot in logs/failures/.",
                   tags="hourglass", image=shot)
             return True
-        if self.last_screen != screens.MINING or not p.founder_done(now):
+        if self.last_screen != screens.MINING:
             return False
         for job in self.jobs:
             if job.name == "freebie" and job.last_run < self.session_t0:
@@ -190,16 +206,49 @@ class Scheduler:
             log.info("cloud %s -> %s", what, result)
             return result
         except JobAborted as e:
-            self.failures += 1
-            log.error("cloud %s aborted: %s (%d/%d)", what, e, self.failures, self.max_failures)
-            shot = save_failure(e.frame, f"cloud_{what}_{e}")
-            if self.failures >= self.max_failures:
-                log.critical("too many job failures; stopping (exit %d)", EXIT_TOO_MANY_FAILURES)
-                alert("stopped_failures", "Obelisk bot STOPPED: repeated failures",
-                      f"Last: cloud {what}: {e}. Screenshots in logs/failures/.",
-                      priority="urgent", tags="rotating_light", force=True, image=shot)
-                raise SystemExit(EXIT_TOO_MANY_FAILURES)
+            self.job_failed(f"cloud {what}", e)
             return None
+
+    def job_failed(self, what: str, e: JobAborted) -> None:
+        self.failures += 1
+        self.session_failed = True
+        log.error("%s aborted: %s (%d/%d)", what if what.startswith("cloud") else f"job {what}",
+                  e, self.failures, self.max_failures)
+        save_failure(e.frame, f"{what.replace(' ', '_')}_{e}")
+        if self.failures >= self.max_failures:
+            self.stop("repeated_failures", "Obelisk bot STOPPED: repeated failures",
+                      f"{self.failures} failures in a row this session. Last: {what}: {e}.")
+
+    def stop(self, key: str, title: str, message: str, tags: str = "rotating_light") -> None:
+        """Stop on purpose (exit 3: systemd won't restart). The alert carries the
+        health picture, which says whether the Pi/Android are fine (then it's a
+        game problem: see logs/failures/) or need a restart/reboot."""
+        log.critical("%s; stopping (exit %d)", message, EXIT_TOO_MANY_FAILURES)
+        image = None
+        try:
+            from .health import run as health_run
+            image, h = health_run(self.dev, copy_to_failures=True, stopped=True)
+            message = f"{h.summary()} {message}"
+        except Exception as he:                 # never let this block the alert
+            log.warning("health picture failed: %s", he)
+        alert(key, title, f"{message} Failure screenshots: dashboard / logs/failures/. "
+              "Restart: dashboard -> Restart bot.", priority="urgent", tags=tags, force=True,
+              image=image)
+        raise SystemExit(EXIT_TOO_MANY_FAILURES)
+
+    def handle_interrupts(self, frame) -> bool:
+        """True if an interrupt handled this frame. An interrupt that can't
+        finish (e.g. its button vanished) is logged with a screenshot; it never
+        crashes the bot, and the next poll looks again."""
+        for h in self.interrupts:
+            try:
+                if h.handle(self.dev, frame):
+                    return True
+            except JobAborted as e:
+                log.error("interrupt %s failed: %s", type(h).__name__, e)
+                save_failure(e.frame, f"interrupt_{e}")
+                return True
+        return False
 
     def end_session(self, upload: bool = True) -> None:
         if upload and self.cloud is not None and self.last_screen == screens.MINING:
@@ -209,7 +258,15 @@ class Scheduler:
         length = self.planner.finish()
         log.info("session end: %d s online; next session %s", length,
                  time.strftime("%H:%M:%S", time.localtime(self.planner.next_start)))
-        report_up()                     # "OK again" if this ends an outage
+        self.record_session_result()
+
+    def record_session_result(self) -> None:
+        self.failed_sessions = self.failed_sessions + 1 if self.session_failed else 0
+        if self.failed_sessions >= self.MAX_FAILED_SESSIONS:
+            self.stop("repeated_failures", "Obelisk bot STOPPED: failing every session",
+                      f"The last {self.failed_sessions} sessions in a row each had a failure.")
+        if not self.session_failed:
+            report_up()                 # "OK again" if this ends an outage
 
     def tick(self) -> None:
         now = time.monotonic()
@@ -219,7 +276,7 @@ class Scheduler:
 
         frame = self.dev.capture()
         self.last_frame, self.last_screen = frame, None
-        if any(h.handle(self.dev, frame) for h in self.interrupts):
+        if self.handle_interrupts(frame):
             return
 
         screen = screens.identify(frame)
@@ -250,16 +307,7 @@ class Scheduler:
             log.info("job %s -> %s", job.name, job.run(self.dev))
             self.failures = 0
         except JobAborted as e:
-            self.failures += 1
-            log.error("job %s aborted: %s (%d/%d)", job.name, e, self.failures, self.max_failures)
-            shot = save_failure(e.frame, f"{job.name}_{e}")
-            if self.failures >= self.max_failures:
-                log.critical("too many job failures; stopping (exit %d)", EXIT_TOO_MANY_FAILURES)
-                alert("stopped_failures", "Obelisk bot STOPPED: repeated job failures",
-                      f"Last: {job.name}: {e}. Screenshots in logs/failures/. "
-                      "Restart with: systemctl --user start obelisk-bot",
-                      priority="urgent", tags="rotating_light", force=True, image=shot)
-                raise SystemExit(EXIT_TOO_MANY_FAILURES)
+            self.job_failed(job.name, e)
         finally:
             self.check_gems(job, before)
 
@@ -270,22 +318,19 @@ class Scheduler:
             log.info("gem guard: couldn't read gems (%s -> %s); not checked", before, after)
             return
         if after < before:
-            log.critical("GEM GUARD: gems went %d -> %d during job %s; stopping (exit %d)",
-                         before, after, job.name, EXIT_TOO_MANY_FAILURES)
-            shot = save_failure(self.dev.capture(), f"GEM_GUARD_{job.name}_{before}_to_{after}")
-            alert("gem_guard", "Obelisk bot STOPPED: gems dropped",
-                  f"Gems went {before} -> {after} during job '{job.name}'. The bot stopped "
-                  "itself; check the game and logs/failures/ before restarting.",
-                  priority="urgent", tags="rotating_light,gem", force=True, image=shot)
-            raise SystemExit(EXIT_TOO_MANY_FAILURES)
+            save_failure(self.dev.capture(), f"GEM_GUARD_{job.name}_{before}_to_{after}")
+            self.stop("gem_guard", "Obelisk bot STOPPED: gems dropped",
+                      f"GEM GUARD: gems went {before} -> {after} during job '{job.name}'. "
+                      "Check the game before restarting.", tags="rotating_light,gem")
         log.info("gem guard: %d -> %d ok", before, after)
 
-    def wait_for_game(self) -> None:
-        ready = (screens.MINING, screens.OFFLINE_OPTIONS, screens.OFFLINE_RESULTS,
-                 screens.LOOTBUG_POPUP, screens.ANR)
-        if wait_for(self.dev, lambda f: screens.identify(f) in ready,
+    def wait_for_game(self) -> bool:
+        if wait_for(self.dev, lambda f: screens.identify(f) in GAME_READY,
                     timeout=self.LAUNCH_WAIT, interval=3) is None:
-            log.error("game restarted but no known screen within %d s", self.LAUNCH_WAIT)
+            log.error("game (re)started but no known screen within %d s", self.LAUNCH_WAIT)
+            save_failure(self.dev.capture(), "relaunch_no_known_screen")
+            return False
+        return True
 
     def ensure_game_in_front(self, planned: bool = False) -> None:
         if self.dev.game_in_front():
@@ -295,12 +340,5 @@ class Scheduler:
         else:
             log.warning("game is not in front; relaunching it")
         self.dev.launch_game()
-        # the game may come back with "Offline Gains" popups; interrupts handle them
-        ready = (screens.MINING, screens.OFFLINE_OPTIONS, screens.OFFLINE_RESULTS,
-                 screens.LOOTBUG_POPUP)
-        if wait_for(self.dev, lambda f: screens.identify(f) in ready,
-                    timeout=self.LAUNCH_WAIT, interval=3) is None:
-            log.error("game relaunched but mining screen not seen within %d s", self.LAUNCH_WAIT)
-            save_failure(self.dev.capture(), "relaunch_no_mining_screen")
-        else:
+        if self.wait_for_game():        # popups (Offline Gains etc.): interrupts handle them
             log.info("game in front again")

@@ -3,8 +3,10 @@ don't tick, freebies and lootbugs bank up) and bring it to the front only for
 short sessions.
 
 Measured 2026-11-01: in the background the game uses ~0% CPU and on return
-shows "Offline Gains" (buffs not consumed with that option off), so HOME is
-enough; no force-stop (which could lose unsaved progress).
+shows "Offline Gains" (buffs not consumed with that option off). Each session
+starts with a force-stop + launch (the game only fetches cloud-save info at
+startup; tested safe: it saves locally when sent to the background) and ends
+with HOME.
 
 The Founder crate drops on its own hourly cycle (the Store's Founder's Bundle
 countdown read 28:48 right after a claim, so claiming does not restart it) and
@@ -22,20 +24,13 @@ class SessionPlanner:
     EVERY = 50 * 60       # seconds between session starts (< the 60 min drop cycle)
     MAX_SESSION = 5 * 60
 
-    def __init__(self, founder=None, clock=time.time):
-        self.founder = founder
+    def __init__(self, clock=time.time):
         self.clock = clock
         self.next_start = clock()         # first session right away
         self.started = None
 
-    def expected_drop(self, t: float):
-        return None                       # not predicted; the crate waits
-
     def start(self) -> None:
         self.started = self.clock()
-
-    def founder_done(self, now: float) -> bool:
-        return True                       # nothing to wait for (see module doc)
 
     def timed_out(self, now: float) -> bool:
         return now - self.started >= self.MAX_SESSION

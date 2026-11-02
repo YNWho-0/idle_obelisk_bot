@@ -1,0 +1,14 @@
+# Periodic health check (see obelisk/health.py): alerts the phone only if the
+# Pi desktop, Waydroid, adb or Android's screen is unhealthy. Read-only: it
+# never presses anything, so it can overlap a bot session.
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-health.service
+#   systemctl --user enable --now ~/idle_obelisk_bot/systemd/obelisk-health.timer
+[Unit]
+Description=Idle Obelisk bot periodic health check
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/idle_obelisk_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk health --alert
+Nice=15

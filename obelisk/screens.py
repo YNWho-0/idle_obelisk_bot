@@ -202,36 +202,6 @@ def founder_crate(frame: np.ndarray) -> Optional[Match]:
     return max(hits, key=lambda m: m.score) if hits else None
 
 
-# Left-side notification toast ("Elixir Drone is now Grade 1!" etc.): a flat
-# dark box (BGR 24,20,16) reaching x~200, where the playfield normally is.
-# HUD timer rows use the same fill but stop at x~95, so x 100-195 is checked.
-# NOTE: measured in layout v1; no v2 sample yet, so NotificationInterrupt is
-# not used until it is re-measured (an open item bag would look similar).
-NOTIF_FILL = np.array([24, 20, 16])
-NOTIF_STRIP = (100, 196)
-NOTIF_ROWS = (250, 1090)
-
-
-def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
-    """(y_top, y_bottom) of a left-side notification box, or None."""
-    if not right_size(frame):
-        return None
-    strip = frame[NOTIF_ROWS[0]:NOTIF_ROWS[1], NOTIF_STRIP[0]:NOTIF_STRIP[1]].astype(int)
-    frac = (np.abs(strip - NOTIF_FILL).max(axis=2) <= 8).mean(axis=1)
-    rows = np.nonzero(frac >= 0.6)[0] + NOTIF_ROWS[0]
-    spans: list[list[int]] = []
-    for y in rows:                       # merge runs split by a line of text
-        if spans and y - spans[-1][1] <= 15:
-            spans[-1][1] = y
-        else:
-            spans.append([y, y])
-    for a, b in spans:
-        dark = int(((rows >= a) & (rows <= b)).sum())
-        if b - a >= 50 and dark >= 50:
-            return int(a), int(b)
-    return None
-
-
 # Cloud screen buttons. Measured HSV means: disabled V~42; enabled red H~174
 # V~168; armed (after the 1st Upload press) orange H~13 V~223.
 CLOUD_DOWNLOAD: Box = (470, 402, 598, 455)

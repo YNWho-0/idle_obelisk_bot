@@ -74,8 +74,6 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
             interrupts["cloud uploads"] += 1
         if msg.startswith("session skipped: cloud save conflict"):
             interrupts["sessions skipped (cloud conflict)"] += 1
-        if msg.startswith("interrupt: dismissing notification"):
-            interrupts["notifications dismissed"] += 1
         elif msg.startswith("interrupt: closing lootbug popup"):
             interrupts["stray Lootbug popups closed"] += 1
         elif msg.startswith("game is not in front"):

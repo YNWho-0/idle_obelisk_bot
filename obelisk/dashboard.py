@@ -94,7 +94,7 @@ def service_state(unit: str = "obelisk-bot") -> str:
 RESTART_UNIT = "obelisk-restart"
 RESTART_LOG = LOGS / "restart.log"
 RESTART_SCRIPT = ROOT / "scripts" / "restart_all.sh"
-HEALTH_UNIT = "obelisk-health"
+HEALTH_UNIT = "obelisk-health-now"   # obelisk-health.service = the 50-min timer
 HEALTH_PNG = LOGS / "health.png"
 
 

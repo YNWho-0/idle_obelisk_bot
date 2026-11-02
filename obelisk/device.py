@@ -17,7 +17,7 @@ import time
 import cv2
 import numpy as np
 
-from . import ACTIVITY, HEIGHT, PACKAGE, WIDTH
+from . import ACTIVITY, ADB_SERIAL, HEIGHT, PACKAGE, WIDTH
 
 log = logging.getLogger("obelisk.device")
 
@@ -29,7 +29,7 @@ class DeviceError(RuntimeError):
 
 
 class Device:
-    def __init__(self, serial: str = "192.168.240.112:5555", dry_run: bool = False):
+    def __init__(self, serial: str = ADB_SERIAL, dry_run: bool = False):
         self.serial = serial
         self.dry_run = dry_run
 
@@ -42,6 +42,16 @@ class Device:
         if res.returncode != 0:
             raise DeviceError(f"{' '.join(cmd)} -> {res.stderr.decode(errors='replace').strip()}")
         return res.stdout
+
+    def connect(self) -> None:
+        """`adb connect` (starts the adb server too). Never raises: if Android
+        isn't up yet, the first capture fails and systemd retries."""
+        try:
+            res = subprocess.run(["adb", "connect", self.serial], capture_output=True,
+                                 text=True, timeout=15)
+            log.info("adb connect %s: %s", self.serial, (res.stdout + res.stderr).strip())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("adb connect %s failed: %s", self.serial, e)
 
     def capture(self) -> np.ndarray:
         """Current screen as a BGR uint8 array of shape (HEIGHT, WIDTH, 3).

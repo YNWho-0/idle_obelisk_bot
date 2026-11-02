@@ -1,0 +1,9 @@
+[Unit]
+Description=Idle Obelisk bot health check every 50 min
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=50min
+
+[Install]
+WantedBy=timers.target

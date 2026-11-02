@@ -37,6 +37,10 @@ _pt.UNREAD_DIR = _TMP / "playtime_unread"
 _jobs.State.PATH = _TMP / "state.json"
 import obelisk.notify as _notify                  # noqa: E402
 _notify.CONF = _TMP / "no-notify.conf"            # tests must never send real alerts
+import obelisk.health as _health                  # noqa: E402
+_health.LOGS, _health.LATEST = _TMP, _TMP / "health.png"
+# Scheduler.stop() attaches a health picture; never run the real (adb/grim) checks
+_health.run = lambda dev=None, copy_to_failures=False, stopped=False: (None, _health.Health(stopped=stopped))
 
 S = ROOT / "screens"
 
@@ -410,7 +414,7 @@ def test_session_opens_handles_offline_popups_runs_jobs_and_goes_home():
     }, in_front=False, after_launch=("off_opts",))
     sched = Scheduler(dev, [founder, LootbugJob()], interrupts=[OfflineGainsInterrupt(),
                       LootbugPopupInterrupt()], poll=0,
-                      planner=SessionPlanner(founder, clock=lambda: clock[0]))
+                      planner=SessionPlanner(clock=lambda: clock[0]))
     for _ in range(8):
         sched.session_step()
         if dev.homes:
@@ -423,7 +427,7 @@ def test_planner_every_50_minutes_and_never_waits():
     clock = [1_000_000.0]
     p = SessionPlanner(clock=lambda: clock[0])
     assert p.next_start == clock[0]                        # first session right away
-    p.start(); assert p.founder_done(clock[0])             # nothing to wait for
+    p.start()
     clock[0] += 30; assert p.finish() == 30
     assert p.next_start == 1_000_000.0 + 50 * 60
 
@@ -502,6 +506,83 @@ def test_gem_guard_stops_on_loss():
         assert e.code == 3
     else:
         raise AssertionError("gem guard did not trip")
+
+
+def test_job_waits_out_a_brief_overlay():
+    # 2026-11-02: a "Free bomb" toast hid the anchors and the freebie job aborted
+    dev = FakeDevice("mining_bugs", {
+        "mining_bugs": [(STORE_ICON, ["store_ready"])],
+        "store_ready": [(CLAIM, ["store_toast", "store_empty"])],
+        "store_empty": [(STORE_X, ["store_closed"])],
+    })
+    dev.queue = ["options", "options", "mining_bugs"]        # overlay for two polls
+    assert FreebieJob().run(dev) == "claimed"
+
+
+def test_failure_policy_per_session():
+    def stops(sched):
+        try:
+            sched.record_session_result()
+        except SystemExit as e:
+            assert e.code == 3
+            return True
+        return False
+    s = Scheduler(FakeDevice("mining_bugs", {}), [], poll=0)
+    for failed in (True, True, False, True, True, False):    # never 3 failing sessions in a row
+        s.session_failed = failed
+        assert not stops(s)
+    for n in range(3):
+        s.session_failed = True
+        assert stops(s) == (n == 2)
+    # within one session: 3 failures in a row stop it
+    s = Scheduler(FakeDevice("mining_bugs", {}), [], poll=0)
+    e = JobAborted("x", FRAMES["options"])
+    s.job_failed("freebie", e); s.job_failed("lootbug", e)
+    try:
+        s.job_failed("cloud upload", e)
+    except SystemExit as ex:
+        assert ex.code == 3
+    else:
+        raise AssertionError("3 failures in a session did not stop")
+
+
+def test_failing_interrupt_never_crashes_the_bot():
+    class Broken:
+        def handle(self, dev, frame):
+            raise JobAborted("button 'offline_close' not found", frame)
+    sched = Scheduler(FakeDevice("mining_bugs", {}), [], interrupts=[Broken()], poll=0)
+    sched.tick()                                             # logged, not raised
+    assert sched.handle_interrupts(FRAMES["mining_bugs"]) is True
+
+
+def test_press_anchor_aborts_instead_of_crashing():
+    try:
+        _jobs.press_anchor(FakeDevice("options", {}), "store_close", FRAMES["mining_bugs"])
+    except JobAborted as e:
+        assert "store_close" in str(e)
+    else:
+        raise AssertionError("no abort")
+
+
+def test_periodic_health_alerts_only_when_unhealthy():
+    import obelisk.bootcheck as bc
+    import obelisk.notify as nt
+    st = _jobs.State(_TMP / "health_state.json")
+    sent = []
+    orig_alert, orig_up = nt.alert, bc.uptime_s
+    nt.alert = lambda key, *a, **k: sent.append(key) or True
+    bc.uptime_s = lambda: 3600
+    try:
+        assert not _health.alert_if_unhealthy(None, _health.Health(level=_health.OK), st)
+        assert _health.alert_if_unhealthy(None, _health.Health(level=_health.RESTART), st)
+        st.set("outage", {"since": 1})                       # the bot is already reporting
+        assert not _health.alert_if_unhealthy(None, _health.Health(level=_health.REBOOT), st)
+        st.set("outage", None)
+        bc.uptime_s = lambda: 300                            # booting: bootcheck reports
+        assert not _health.alert_if_unhealthy(None, _health.Health(level=_health.REBOOT), st)
+    finally:
+        nt.alert, bc.uptime_s = orig_alert, orig_up
+    assert sent == ["health_restart"]
 
 
 # ---------------------------------------------------------------- outages

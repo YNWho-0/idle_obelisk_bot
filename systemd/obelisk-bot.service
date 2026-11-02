@@ -18,8 +18,7 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=%h/idle_obelisk_bot
 Environment=PYTHONUNBUFFERED=1
-# Waydroid's adb endpoint; "-" = don't fail the start if it isn't reachable yet.
-ExecStartPre=-/usr/bin/adb connect 192.168.240.112:5555
+# The bot runs `adb connect` itself (endpoint: ADB_SERIAL in obelisk/__init__.py).
 ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk run
 # Crashes (adb dropped, Waydroid not running, wrong resolution) -> retry in 60 s.
 Restart=on-failure
