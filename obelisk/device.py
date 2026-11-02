@@ -10,6 +10,7 @@ Findings this is built on (verified 2026-11-01):
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 
@@ -43,8 +44,21 @@ class Device:
         return res.stdout
 
     def capture(self) -> np.ndarray:
-        """Current screen as a BGR uint8 array of shape (HEIGHT, WIDTH, 3)."""
-        raw = self._adb("exec-out", "screencap")
+        """Current screen as a BGR uint8 array of shape (HEIGHT, WIDTH, 3).
+
+        If screencap hangs, nudge the host desktop and try once more: on
+        2026-11-02 the Pi's monitor-less desktop stopped giving the restarted
+        game a window, and screencap hung for 3 h until a VNC viewer connected
+        (a host screenshot makes the compositor render, as VNC does)."""
+        try:
+            raw = self._adb("exec-out", "screencap")
+        except DeviceError as e:
+            if not str(e).startswith("timeout:"):
+                raise
+            log.warning("screencap timed out; nudging the host display and retrying")
+            nudge_host_display()
+            time.sleep(2)
+            raw = self._adb("exec-out", "screencap")
         return decode_raw(raw)
 
     def press(self, x: int, y: int) -> None:
@@ -122,6 +136,24 @@ class Device:
     @staticmethod
     def sleep(seconds: float) -> None:
         time.sleep(seconds)
+
+
+def nudge_host_display() -> bool:
+    """Take (and discard) a screenshot of the Pi's own Wayland desktop, which
+    makes the compositor render a frame. Never raises; True if it worked."""
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+    try:
+        res = subprocess.run(["grim", "-l", "0", "-"], env=env, timeout=10,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("host display nudge failed: %s", e)
+        return False
+    if res.returncode != 0:
+        log.warning("host display nudge failed: %s", res.stderr.decode(errors="replace").strip())
+        return False
+    return True
 
 
 def decode_raw(raw: bytes) -> np.ndarray:

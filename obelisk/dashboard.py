@@ -1,9 +1,12 @@
-"""Read-only phone dashboard for the bot (Flask).
+"""Phone dashboard for the bot (Flask).
 
   venv/bin/python -m obelisk dashboard            # serves on 0.0.0.0:8765
 
-It only READS the bot's files (logs/, state.json, daily reports, screenshots)
-and `systemctl --user is-active`; it never talks to the device or the game.
+It reads the bot's files (logs/, state.json, daily reports, screenshots) and
+`systemctl --user is-active`; it never talks to the device or the game. Its
+only writes: pause/resume/session-now flags in state.json, and the Restart
+buttons (bot service / Waydroid session + bot via scripts/restart_all.sh /
+reboot the Pi).
 
 Access needs the secret token from dashboard.conf (gitignored): open
 http://<pi>:8765/?t=<token> once; a cookie remembers it on that phone.
@@ -88,6 +91,39 @@ def service_state(unit: str = "obelisk-bot") -> str:
         return "unknown"
 
 
+RESTART_UNIT = "obelisk-restart"
+RESTART_LOG = LOGS / "restart.log"
+RESTART_SCRIPT = ROOT / "scripts" / "restart_all.sh"
+
+
+def restart_log(n: int = 6) -> list[str]:
+    try:
+        return RESTART_LOG.read_text(errors="replace").splitlines()[-n:]
+    except OSError:
+        return []
+
+
+def start_restart(what: str, run=subprocess.run) -> str | None:
+    """Kick off a restart; returns an error message or None. Runs as its own
+    transient unit so it survives whatever it restarts."""
+    if what == "reboot":
+        with RESTART_LOG.open("a") as f:
+            f.write(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S} reboot: requested from dashboard\n")
+        cmd = ["systemctl", "reboot"]
+    elif what in ("bot", "all"):
+        if service_state(RESTART_UNIT) in ("active", "activating"):
+            return "a restart is already running"
+        cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit={RESTART_UNIT}",
+               str(RESTART_SCRIPT)] + (["bot"] if what == "bot" else [])
+    else:
+        return "unknown restart"
+    try:
+        r = run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        return str(e)
+    return None if r.returncode == 0 else (r.stderr.strip() or f"exit {r.returncode}")
+
+
 def state() -> dict:
     try:
         return json.loads((LOGS / "state.json").read_text())
@@ -149,6 +185,8 @@ def collect() -> dict:
         "reports": reports,
         "paused_until": st.get("paused_until"),
         "session_now": st.get("session_now"),
+        "restart_running": service_state(RESTART_UNIT) in ("active", "activating"),
+        "restart_log": restart_log(),
         "latest_mtime": (dt.datetime.fromtimestamp((LOGS / "latest.jpg").stat().st_mtime)
                          if (LOGS / "latest.jpg").exists() else None),
     }
@@ -236,6 +274,24 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin
 </div>
 
 <div class="card">
+ <h2>Restart</h2>
+ {% if err %}<p style="color:var(--bad);margin:0 0 8px">Restart failed: {{ err }}</p>{% endif %}
+ <form method="post" action="restart" class="ctl">
+  <button name="a" value="bot" {{ 'disabled' if d.restart_running }}
+   onclick="return confirm('Restart the bot? It starts a session right away.')">Restart bot</button>
+  <button name="a" value="all" {{ 'disabled' if d.restart_running }}
+   onclick="return confirm('Restart Waydroid, the game and the bot? Takes about a minute.')">Restart Waydroid + bot</button>
+  <button name="a" value="reboot" {{ 'disabled' if d.restart_running }}
+   onclick="return confirm('Reboot the whole Pi? The dashboard is gone for a few minutes.')">Reboot Pi</button>
+ </form>
+ <span class="sub">Try them in this order. "Waydroid + bot" also fixes a frozen game screen.</span>
+ {% if d.restart_running or d.restart_log %}<div class="ev" style="margin-top:8px">
+  {% if d.restart_running %}<div class="WARNING">restart in progress… (page refreshes every minute)</div>{% endif %}
+  {% for line in d.restart_log|reverse %}<div>{{ line }}</div>{% endfor %}
+ </div>{% endif %}
+</div>
+
+<div class="card">
  <h2>Today</h2>
  <div class="tiles">
   <div class="tile"><b>{{ d.founder }}</b><span>founder crates</span></div>
@@ -297,7 +353,16 @@ def create_app() -> Flask:
         pu = d["paused_until"]
         txt = (dt.datetime.fromtimestamp(float(pu)).strftime("%H:%M")
                if pu not in (None, "forever") else "")
-        return render_template_string(PAGE, d=d, chart=gem_svg(d["gems"]), pause_until_txt=txt)
+        return render_template_string(PAGE, d=d, chart=gem_svg(d["gems"]), pause_until_txt=txt,
+                                      err=request.args.get("err", "")[:200])
+
+    @app.post("/restart")
+    def restart():
+        err = start_restart(request.form.get("a", ""))
+        if err:
+            from urllib.parse import quote
+            return redirect(f"./?err={quote(err)}", code=303)
+        return redirect("./", code=303)
 
     @app.post("/control")
     def control():

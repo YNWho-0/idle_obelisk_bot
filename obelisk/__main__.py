@@ -165,13 +165,7 @@ def main() -> None:
         try:
             dev.ensure_resolution()  # re-applies wm size if Waydroid lost it
         except Exception as e:
-            from .bootcheck import uptime_s
-            from .notify import alert
-            if uptime_s() < 600:          # still booting (Waydroid not up yet): bootcheck reports
-                raise
-            alert("crash", "Obelisk bot can't start (systemd retries every 60 s)",
-                  f"{type(e).__name__}: {e}. Often Waydroid/adb not running.",
-                  priority="high", tags="warning")
+            _report_down("Obelisk bot can't start", e)
             raise
     else:
         dev.check_resolution()
@@ -195,14 +189,20 @@ def main() -> None:
                       poll=3.0, planner=planner,
                       cloud=None if planner is None else CloudSync()).run_forever()
         except Exception as e:
-            from .bootcheck import uptime_s
-            from .notify import alert
-            if uptime_s() < 600:
-                raise
-            alert("crash", "Obelisk bot crashed (systemd retries every 60 s)",
-                  f"{type(e).__name__}: {e}. Often Waydroid/adb not running.",
-                  priority="high", tags="warning")
+            _report_down("Obelisk bot crashed", e)
             raise
+
+
+def _report_down(title: str, e: Exception) -> None:
+    """Alert/track the outage; exits with code 3 (no more systemd restarts)
+    once it has lasted too long. Silent while still booting (bootcheck reports)."""
+    from .bootcheck import uptime_s
+    from .outage import EXIT_GAVE_UP, report_down
+    if uptime_s() < 600:
+        return
+    if report_down(title, e):
+        logging.getLogger("obelisk").error("giving up: %s: %s", type(e).__name__, e)
+        sys.exit(EXIT_GAVE_UP)
 
 
 if __name__ == "__main__":

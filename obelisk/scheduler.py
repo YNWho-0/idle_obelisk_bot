@@ -19,6 +19,7 @@ import cv2
 from . import screens
 from .gems import stable_gems
 from .notify import alert
+from .outage import report_up
 from .jobs import JobAborted, save_failure, wait_for
 
 # Exit code for "stopped on purpose after repeated job failures"; the
@@ -70,6 +71,8 @@ class Scheduler:
         while True:
             if self.planner is None:
                 self.tick()
+                if self.last_screen == screens.MINING:
+                    report_up()
             else:
                 self.session_step()
 
@@ -206,6 +209,7 @@ class Scheduler:
         length = self.planner.finish()
         log.info("session end: %d s online; next session %s", length,
                  time.strftime("%H:%M:%S", time.localtime(self.planner.next_start)))
+        report_up()                     # "OK again" if this ends an outage
 
     def tick(self) -> None:
         now = time.monotonic()

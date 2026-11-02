@@ -504,6 +504,62 @@ def test_gem_guard_stops_on_loss():
         raise AssertionError("gem guard did not trip")
 
 
+# ---------------------------------------------------------------- outages
+
+def test_outage_alerts_remind_give_up_and_recover():
+    import obelisk.outage as out
+    st = _jobs.State(_TMP / "outage_state.json")
+    sent = []
+    snd = lambda title, msg, prio, tags: sent.append(title)
+    t0 = 1_000_000.0
+    assert not out.report_down("crashed", "E1", st, t0, snd)
+    assert sent == ["crashed"]
+    for m in range(1, 30):                                # retries each minute: quiet
+        assert not out.report_down("can't start", "E2", st, t0 + 60 * m, snd)
+    assert len(sent) == 1
+    t = t0
+    for m in range(30, 120):
+        t = t0 + 60 * m
+        assert not out.report_down("can't start", "E2", st, t, snd)
+    assert [x.startswith("Obelisk bot still down") for x in sent[1:]] == [True, True]
+    assert out.report_down("can't start", "E2", st, t0 + 7200, snd)   # give up
+    assert sent[-1].startswith("Obelisk bot STOPPED")
+    assert out.report_up(st, t0 + 9000, snd) and sent[-1] == "Obelisk bot OK again"
+    assert not out.report_up(st, t0 + 9100, snd)          # only once
+    # a failure long after the last one starts a new outage (no instant give-up)
+    out.report_down("crashed", "E3", st, t0 + 9000, snd)
+    assert not out.report_down("crashed", "E3", st, t0 + 99_000, snd)
+    assert sent[-1] == "crashed"
+
+
+def test_capture_timeout_nudges_host_and_retries():
+    import obelisk.device as d
+    calls = {"adb": 0, "nudge": 0}
+    raw = np.zeros(16 + 4 * 4, np.uint8)
+    raw[:16] = np.frombuffer(np.array([2, 2, 1, 0], "<u4").tobytes(), np.uint8)
+    def fake_adb(*a, **k):
+        calls["adb"] += 1
+        if calls["adb"] == 1:
+            raise d.DeviceError("timeout: adb exec-out screencap")
+        return raw.tobytes()
+    orig_nudge, orig_sleep = d.nudge_host_display, d.time.sleep
+    d.nudge_host_display = lambda: calls.__setitem__("nudge", calls["nudge"] + 1) or True
+    d.time.sleep = lambda s: None
+    try:
+        dev = d.Device()
+        dev._adb = fake_adb
+        assert dev.capture().shape[:2] == (2, 2)
+        assert calls == {"adb": 2, "nudge": 1}
+        dev._adb = lambda *a, **k: (_ for _ in ()).throw(d.DeviceError("adb -> offline"))
+        try:
+            dev.capture()
+        except d.DeviceError:
+            pass
+        assert calls["nudge"] == 1                       # only timeouts nudge
+    finally:
+        d.nudge_host_display, d.time.sleep = orig_nudge, orig_sleep
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

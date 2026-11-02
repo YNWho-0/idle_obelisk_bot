@@ -1,9 +1,10 @@
-# Read-only phone dashboard for the Idle Obelisk bot (port 8765; token in
-# ~/idle_obelisk_bot/dashboard.conf). It never touches the device or game.
+# Phone dashboard for the Idle Obelisk bot (port 8765; token in
+# ~/idle_obelisk_bot/dashboard.conf). It never touches the device or game;
+# it can pause the bot and restart the bot / Waydroid session / Pi.
 #   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-dashboard.service
 #   systemctl --user enable --now obelisk-dashboard
 [Unit]
-Description=Idle Obelisk bot dashboard (read-only, port 8765)
+Description=Idle Obelisk bot dashboard (port 8765)
 After=network-online.target
 
 [Service]

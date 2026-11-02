@@ -52,7 +52,10 @@ turns off again. **Stop the bot before pressing anything on the Pi yourself**
 The ntfy app subscribed to the topic in `notify.conf` (gitignored; keep it
 private) gets: gem guard / failure stops (urgent), cloud conflicts and crashes
 (high), stuck screens and session timeouts, and the nightly summary (quiet
-unless it needs a look). Each kind is sent at most once per 6 h.
+unless it needs a look). Each kind is sent at most once per 6 h, except
+outages (`obelisk/outage.py`): one alert when the bot goes down, reminders
+at 30 min and 1 h, a STOPPED alert at 2 h, and "OK again" after the next
+good session.
 `venv/bin/python -m obelisk notify-test` sends a test alert.
 
 ## How it works
@@ -88,7 +91,14 @@ venv/bin/python -m obelisk summary           # today so far; nightly reports in 
 
 A bot that stopped itself (3 failed jobs, or the gem guard) exits with code 3
 and is NOT restarted; check `logs/failures/` first. Crashes (adb, Waydroid
-down) retry every 60 s.
+down) retry every 60 s; after 2 h of failing it also exits with code 3.
+If screencap hangs, the bot first screenshots the Pi's own desktop (`grim`)
+to wake it: with no monitor attached, the desktop once stopped showing the
+game for 3 h until a VNC viewer connected. If the bot still gave up, connect
+with VNC, then `systemctl --user restart obelisk-bot`.
+The dashboard's Restart card does the same from a phone: restart the bot,
+restart Waydroid + game + bot (`scripts/restart_all.sh`, progress in
+`logs/restart.log`), or reboot the Pi.
 
 One-off commands (stop the service first):
 
