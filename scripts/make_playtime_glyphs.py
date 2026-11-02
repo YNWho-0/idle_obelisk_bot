@@ -20,6 +20,8 @@ KNOWN = {   # layout v2
     "n54_uploaded.png": ("05d16h25m41s", "05d16h25m52s"),
     "n81_cloudtime_05d16h33m01s_crop.png": ("05d16h33m01s", None),   # CLOUD_ROW crop only
     "n92_cloudtime_05d17h06m49s_crop.png": ("05d17h06m49s", None),   # first 9
+    "n104_time_05d20h28m31s_crop.png": ("05d20h28m31s", None),      # first 8 (row crop)
+    "n104_time_05d20h18m36s_crop.png": ("05d20h18m36s", None),
 }
 
 

@@ -124,11 +124,20 @@ class Scheduler:
                 job.last_run = float("-inf")
             if hasattr(job, "last_check"):
                 job.last_check = float("-inf")
-        self.ensure_game_in_front(planned=True)
+        if self.cloud is not None:
+            # the game only fetches cloud-save info at startup; restart it so a
+            # newer save from another device is seen (it saves when backgrounded)
+            self.dev.restart_game()
+            self.wait_for_game()
+        else:
+            self.ensure_game_in_front(planned=True)
         self.last_foreground_check = time.monotonic()
         if not self.settle():
             log.warning("session: mining screen not stable after %d s; continuing", self.SETTLE_TIMEOUT)
-        if self.cloud is not None and self.cloud_step("check") in ("conflict", "cloud_newer"):
+        result = self.cloud_step("check") if self.cloud is not None else None
+        if result == "downloaded":
+            self.settle()                      # reloaded: Offline Gains popups again
+        if result in ("conflict", "cloud_newer"):
             log.warning("session skipped: cloud save conflict (see 'python -m obelisk cloud --status')")
             self.end_session(upload=False)
 
@@ -266,6 +275,13 @@ class Scheduler:
                   priority="urgent", tags="rotating_light,gem", force=True, image=shot)
             raise SystemExit(EXIT_TOO_MANY_FAILURES)
         log.info("gem guard: %d -> %d ok", before, after)
+
+    def wait_for_game(self) -> None:
+        ready = (screens.MINING, screens.OFFLINE_OPTIONS, screens.OFFLINE_RESULTS,
+                 screens.LOOTBUG_POPUP, screens.ANR)
+        if wait_for(self.dev, lambda f: screens.identify(f) in ready,
+                    timeout=self.LAUNCH_WAIT, interval=3) is None:
+            log.error("game restarted but no known screen within %d s", self.LAUNCH_WAIT)
 
     def ensure_game_in_front(self, planned: bool = False) -> None:
         if self.dev.game_in_front():

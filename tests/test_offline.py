@@ -74,6 +74,9 @@ F = {
     "store_full": "n90_mining_store_full.png",      # Store button in its 'bank full' form
     "bug_popup_15": "n91_lootbug_popup_15.png",     # 2-digit count shifts the centred header
     "anr": "n93_anr_dialog.png",                    # Android "isn't responding" over the game
+    "cloud_phone_newer": "n99_cloud_after_restart.png",   # Download enabled, cloud 05d20h27m13s
+    "cloud_dl_armed": "n100_download_press1_1.png",
+    "after_download": "n101_download_1.png",              # reloaded: Offline Gains
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -134,6 +137,11 @@ class FakeDevice:
         return self.in_front
 
     def launch_game(self):
+        self.launches += 1
+        self.in_front = True
+        self.queue = list(self.after_launch)
+
+    def restart_game(self):
         self.launches += 1
         self.in_front = True
         self.queue = list(self.after_launch)
@@ -345,6 +353,36 @@ def test_cloud_turns_autosave_off_and_uploads():
                                            "cloud_armed", "cloud_uploaded"]
 
 
+DOWNLOAD_BTN = (470, 402, 598, 455)
+
+
+def test_cloud_downloads_newer_save_from_another_device():
+    st = _jobs.State(_TMP / "dl.json")
+    st.set("cloud_last_upload", 504982)                      # the Pi's last upload (05d20h16m22s)
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_phone_newer"])],
+        "cloud_phone_newer": [(DOWNLOAD_BTN, ["cloud_dl_armed"])],
+        "cloud_dl_armed": [(DOWNLOAD_BTN, ["after_download"])],
+    })
+    assert CloudSync(st).check(dev) == "downloaded"
+    assert st.get("cloud_last_upload") == (5 * 24 + 20) * 3600 + 27 * 60 + 13
+    assert not st.get("cloud_conflict")
+    assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses)
+
+
+def test_cloud_never_downloads_its_own_upload():
+    st = _jobs.State(_TMP / "dl2.json")
+    st.set("cloud_last_upload", (5 * 24 + 20) * 3600 + 27 * 60 + 13)    # == cloud shown
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_phone_newer"])],
+        "cloud_phone_newer": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).check(dev) == "in_sync"
+    assert all(not inside(p[1], DOWNLOAD_BTN) for p in dev.presses)
+
+
 def test_cloud_conflict_never_uploads():
     st = _jobs.State(_TMP / "c2.json")
     st.set("cloud_last_upload", 12345)                       # cloud shows something else
@@ -388,6 +426,14 @@ def test_planner_every_50_minutes_and_never_waits():
     p.start(); assert p.founder_done(clock[0])             # nothing to wait for
     clock[0] += 30; assert p.finish() == 30
     assert p.next_start == 1_000_000.0 + 50 * 60
+
+
+def test_state_never_writes_back_stale_values():
+    a = _jobs.State(_TMP / "shared.json"); b = _jobs.State(_TMP / "shared.json")
+    a.set("paused_until", "forever")
+    b.set("paused_until", None)                  # e.g. the dashboard resumes
+    a.set("cloud_last_upload", 1)                # a long-lived State writes another key
+    assert b.get("paused_until") is None and b.get("cloud_last_upload") == 1
 
 
 def test_alerts_are_deduplicated_and_never_raise():

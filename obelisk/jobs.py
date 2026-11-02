@@ -253,26 +253,35 @@ class FounderJob:
 
 
 class State:
-    """Tiny persistent key/value store (logs/state.json)."""
+    """Tiny persistent key/value store (logs/state.json), shared by the bot and
+    the dashboard. Every get/set re-reads the file, so a long-lived State never
+    writes back stale values (it once re-paused the bot after a resume)."""
 
     PATH = Path(__file__).resolve().parent.parent / "logs" / "state.json"
 
     def __init__(self, path: "Path | None" = None):
         self.path = path or self.PATH
+
+    def _load(self) -> dict:
         try:
-            self.data = json.loads(self.path.read_text())
+            return json.loads(self.path.read_text())
         except (OSError, ValueError):
-            self.data = {}
+            return {}
+
+    @property
+    def data(self) -> dict:
+        return self._load()
 
     def get(self, key, default=None):
-        return self.data.get(key, default)
+        return self._load().get(key, default)
 
     def set(self, key, value) -> None:
-        self.data[key] = value
+        data = self._load()
+        data[key] = value
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.data, indent=1))
+            tmp.write_text(json.dumps(data, indent=1))
             tmp.replace(self.path)
         except OSError as e:
             log.warning("could not save state: %s", e)
@@ -401,8 +410,15 @@ class CloudSync:
     def _decide(self, dev, frame, upload: bool) -> str:
         from .playtime import CLOUD_ROW, read_seconds
         frame = self._autosave_off(dev, frame)
+        last = self.state.get("cloud_last_upload")
         if screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled":
-            return self._conflict(frame, "cloud save has more play time than this device's")
+            cloud_t = read_seconds(frame, CLOUD_ROW)
+            if cloud_t is not None and last is not None and cloud_t == last:
+                # our own upload; the Pi's stored local save just lags behind it
+                return "in_sync"
+            if cloud_t is None:
+                return self._conflict(frame, "cloud save has more play time, but its time is unreadable")
+            return self._download(dev, frame, cloud_t)
         if self.state.get("cloud_conflict"):
             log.warning("cloud: conflict still unresolved (%s)", self.state.get("cloud_conflict"))
             return "conflict"
@@ -411,7 +427,6 @@ class CloudSync:
             log.warning("cloud: couldn't read the cloud play time; not uploading this session")
             save_failure(frame, "cloud_time_unreadable")
             return "unreadable"
-        last = self.state.get("cloud_last_upload")
         if last is not None and cloud_t != last:
             return self._conflict(frame, f"cloud play time {cloud_t}s != this bot's last upload {last}s")
         up = screens.cloud_button(frame, CLOUD_UPLOAD)
@@ -440,11 +455,35 @@ class CloudSync:
             log.info("cloud: uploaded (cloud play time now %ds)", new_t)
         return "uploaded"
 
+    def _download(self, dev, frame, cloud_t: int) -> str:
+        """Another device uploaded MORE play time: load it (the user's rule:
+        keep the newer save). Two presses, like Upload; the game then reloads
+        and shows its Offline Gains popups (handled by the interrupts)."""
+        from .notify import alert
+        log.warning("cloud: another device's save has more play time (%ds): downloading it", cloud_t)
+        dev.press(*_center(CLOUD_DOWNLOAD))
+        armed = wait_for(dev, lambda f: screens.cloud_button(f, CLOUD_DOWNLOAD) == "armed", timeout=3)
+        if armed is None:
+            raise JobAborted("cloud: Download did not arm", dev.capture())
+        dev.press(*_center(CLOUD_DOWNLOAD))
+        loaded = wait_for(dev, lambda f: screens.identify(f) != CLOUD, timeout=20)
+        if loaded is None:
+            raise JobAborted("cloud: game did not reload after Download", dev.capture())
+        self.state.set("cloud_last_upload", cloud_t)
+        self.state.set("cloud_conflict", None)
+        alert("cloud_download", "Obelisk bot: loaded your newer save from the cloud",
+              f"Another device (e.g. your iPhone) uploaded a save with more play time "
+              f"({cloud_t // 3600}h total); the Pi downloaded it and continues from there.",
+              tags="arrow_down,cloud", state=self.state, force=True)
+        log.info("cloud: downloaded (cloud play time %ds)", cloud_t)
+        return "downloaded"
+
     @staticmethod
     def _close(dev) -> None:
         # an overlay (e.g. a "Free bomb" toast) can briefly hide the anchors:
         # wait until the screen is recognisable before deciding
-        frame = wait_for(dev, lambda f: screens.identify(f) in (CLOUD, GRID_MENU, MINING), timeout=5)
+        frame = wait_for(dev, lambda f: screens.identify(f) in
+                         (CLOUD, GRID_MENU, MINING, OFFLINE_OPTIONS, OFFLINE_RESULTS), timeout=5)
         if frame is None:
             raise JobAborted("cloud: screen not recognised when closing", dev.capture())
         if screens.identify(frame) in (CLOUD, GRID_MENU):

@@ -101,6 +101,17 @@ class Device:
         log.info("HOME (game to background)")
         self._adb("shell", "input", "keyevent", "KEYCODE_HOME")
 
+    def restart_game(self) -> None:
+        """Fresh start (the game only fetches cloud-save info at startup). Safe:
+        tested 2026-11-01, the game saves locally when sent to the background."""
+        if self.dry_run:
+            log.info("DRY RUN restart %s", PACKAGE)
+            return
+        log.info("restarting %s", PACKAGE)
+        self._adb("shell", "am", "force-stop", PACKAGE)
+        time.sleep(2)
+        self._adb("shell", "am", "start", "-n", f"{PACKAGE}/{ACTIVITY}")
+
     def launch_game(self) -> None:
         if self.dry_run:
             log.info("DRY RUN launch %s", PACKAGE)
