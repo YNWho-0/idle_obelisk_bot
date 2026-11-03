@@ -147,10 +147,15 @@ def find_freebie_row(dev):
     return None
 
 
+# s; a big freebie reward (jackpot: "Stonks Bonus", 5x loot rolls) lists its
+# rewards over the Store for several seconds and hides the store anchors
+STORE_SETTLE = 12.0
+
+
 def close_store(dev) -> None:
-    frame = dev.capture()
-    if screens.identify(frame) != STORE:
-        raise JobAborted("expected store before closing", frame)
+    frame = wait_for(dev, lambda f: screens.identify(f) == STORE, timeout=STORE_SETTLE)
+    if frame is None:
+        raise JobAborted("expected store before closing", dev.capture())
     press_anchor(dev, "store_close", frame)
     if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
         raise JobAborted("store did not close", dev.capture())
