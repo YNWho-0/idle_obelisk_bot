@@ -61,6 +61,7 @@ class A:
             "claim_empty":    dict(home=(550, 665, 644, 726), threshold=0.85),
             "lootbug_header": dict(home=(250, 128, 420, 154), margin=20, threshold=0.85),
             "lootbug_close":  dict(home=(575, 148, 625, 197)),
+            "lootbug_close_2": dict(home=(575, 148, 625, 197)),
             **{n: dict(home=LOOTBUG_HOMES[n], threshold=0.75, search=LOOTBUG_FIELD)
                for n in LOOTBUG_HOMES},
             "offline_options_label": dict(home=(214, 704, 506, 763)),
@@ -87,12 +88,17 @@ def store_button(frame: np.ndarray) -> Optional[Match]:
     return A.get("store_icon").find(frame) or A.get("store_icon_full").find(frame)
 
 
+def lootbug_close(frame: np.ndarray) -> Optional[Match]:
+    """The Lootbug popup's top-right X (drawn slightly differently since v2.2.52)."""
+    return A.get("lootbug_close").find(frame) or A.get("lootbug_close_2").find(frame)
+
+
 def identify(frame: np.ndarray) -> str:
     if not right_size(frame):
         return UNKNOWN
     if A.get("anr_title").find(frame) and A.get("anr_wait").find(frame):
         return ANR
-    if A.get("lootbug_header").find(frame) and A.get("lootbug_close").find(frame):
+    if A.get("lootbug_header").find(frame) and lootbug_close(frame):
         return LOOTBUG_POPUP
     if A.get("offline_options_label").find(frame) and A.get("offline_confirm").find(frame):
         return OFFLINE_OPTIONS

@@ -81,6 +81,9 @@ F = {
     "cloud_phone_newer": "n99_cloud_after_restart.png",   # Download enabled, cloud 05d20h27m13s
     "cloud_dl_armed": "n100_download_press1_1.png",
     "after_download": "n101_download_1.png",              # reloaded: Offline Gains
+    "cloud_version_block": "n104_cloud_version_block.png",  # cloud v2.2.52, Pi v2.2.51: both greyed
+    "cloud_same_version": "n105_cloud_same_version.png",    # both v2.2.52: Download enabled
+    "bug_popup_v2252": "n106_lootbug_popup_v2252.png",      # X icon about 1 px off the older one
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -397,6 +400,72 @@ def test_cloud_conflict_never_uploads():
     })
     assert CloudSync(st).upload(dev) == "conflict" and st.get("cloud_conflict")
     assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses)
+
+
+def test_lootbug_popup_v2252_closes_with_its_x_only():
+    assert screens.identify(FRAMES["bug_popup_v2252"]) == screens.LOOTBUG_POPUP
+    dev = FakeDevice("bug_popup_v2252", {"bug_popup_v2252": [(BUG_POPUP_X, ["no_bugs"])]})
+    _jobs.close_lootbug_popup(dev)
+    assert [p[0] for p in dev.presses] == ["bug_popup_v2252"]
+
+
+def test_read_version():
+    for name, cloud, local in (("cloud", (2, 2, 51), (2, 2, 51)),
+                               ("cloud_version_block", (2, 2, 52), (2, 2, 51)),
+                               ("cloud_same_version", (2, 2, 52), (2, 2, 52))):
+        assert _pt.read_version(FRAMES[name], _pt.CLOUD_VERSION_ROW) == cloud, name
+        assert _pt.read_version(FRAMES[name], _pt.LOCAL_VERSION_ROW) == local, name
+    assert _pt.read_version(FRAMES["grid"], _pt.CLOUD_VERSION_ROW) is None
+
+
+def test_cloud_version_block_never_presses_download_or_upload():
+    st = _jobs.State(_TMP / "vb.json")
+    st.set("cloud_last_upload", 517416)
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_version_block"])],
+        "cloud_version_block": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).upload(dev) == "conflict"
+    assert "v2.2.52" in st.get("cloud_version_block") and "v2.2.51" in st.get("cloud_version_block")
+    assert st.get("cloud_conflict") == st.get("cloud_version_block")
+    assert all(not inside(p[1], UPLOAD_BTN) and not inside(p[1], DOWNLOAD_BTN) for p in dev.presses)
+
+
+def test_cloud_version_block_ends_with_a_download_after_the_update():
+    st = _jobs.State(_TMP / "vb2.json")
+    st.set("cloud_last_upload", 517416)
+    st.set("cloud_version_block", "old")
+    st.set("cloud_conflict", "old")
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_same_version"])],
+        "cloud_same_version": [(DOWNLOAD_BTN, ["cloud_dl_armed"])],
+        "cloud_dl_armed": [(DOWNLOAD_BTN, ["after_download"])],
+    })
+    assert CloudSync(st).check(dev) == "downloaded"
+    assert not st.get("cloud_version_block") and not st.get("cloud_conflict")
+    assert st.get("cloud_last_upload") == (5 * 24 + 23) * 3600 + 49 * 60 + 51
+
+
+def test_keep_pi_refuses_during_a_version_block():
+    import obelisk.__main__ as cli
+    st = _jobs.State()
+    st.set("cloud_version_block", "versions differ")
+    st.set("cloud_conflict", "versions differ")
+    st.set("cloud_last_upload", 517416)
+    argv, sys.argv = sys.argv, ["obelisk", "cloud", "--keep-pi"]
+    try:
+        cli.main()
+        raise AssertionError("--keep-pi ran")
+    except SystemExit as e:
+        assert e.code == 1
+    finally:
+        sys.argv = argv
+    assert st.get("cloud_conflict") and st.get("cloud_last_upload") == 517416
+    st.set("cloud_version_block", None)
+    st.set("cloud_conflict", None)
+    st.set("cloud_last_upload", None)
 
 
 # ---------------------------------------------------------------- scheduler / sessions

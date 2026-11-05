@@ -44,7 +44,15 @@ To keep the phone's save instead, play long enough on the phone that its play
 time passes the Pi's, upload, and download it on the Pi (by hand for now; the
 game only enables Download when the cloud save has more play time). Loading a
 save restores that save's settings, including Cloud Auto-Save, which the bot
-turns off again. **Stop the bot before pressing anything on the Pi yourself**
+turns off again.
+
+**Game versions:** if the cloud save has more play time but comes from a
+different game version, the game greys out Download. The bot then alerts "update
+the game" and skips sessions. Update the older device (Pi: Play Store); the next
+session loads the cloud save by itself. `--keep-pi` refuses to run in this state,
+because the Pi could later overwrite the newer save.
+
+**Stop the bot before pressing anything on the Pi yourself**
 (it can't tell your presses from its own).
 
 ## Phone alerts (ntfy)

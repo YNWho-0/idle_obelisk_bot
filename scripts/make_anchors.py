@@ -34,6 +34,8 @@ ANCHORS = [
     # Lootbug popup (a GEM SHOP below the header; only ever press its top-right X)
     ("lootbug_header", "n21_lootbug_popup_settled.png", (250, 128, 420, 154)),  # words only: the row is centred, shifts with the count
     ("lootbug_close",  "n21_lootbug_popup_settled.png", (575, 148, 625, 197)),
+    # ...and its X as drawn on v2.2.52 (the icon sits about 1 px off)
+    ("lootbug_close_2", "n106_lootbug_popup_v2252.png", (575, 148, 625, 197)),
     # Lootbug sprite on the field (head + body, no flapping wings)
     ("lootbug_red_1",  "n10_mining_bugs_crate_1.png", (377, 605, 409, 690)),
     # Offline Gains popups after the game returns from the background

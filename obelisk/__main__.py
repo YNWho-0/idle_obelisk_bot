@@ -131,6 +131,13 @@ def main() -> None:
         from .jobs import State
         st = State()
         if args.keep_pi:
+            blocked = st.get("cloud_version_block")
+            if blocked:
+                # the game greys out Upload too; clearing the conflict would only
+                # remove the check, and the Pi could overwrite the newer save later
+                print(f"REFUSED: {blocked}.\nUpdate the game on the older device "
+                      "instead (Pi: Play Store); the next session then loads the cloud save.")
+                raise SystemExit(1)
             st.set("cloud_conflict", None)
             st.set("cloud_last_upload", None)
             print("conflict cleared; the next session uploads this device's save "

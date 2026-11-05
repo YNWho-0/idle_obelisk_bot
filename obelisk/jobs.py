@@ -204,7 +204,7 @@ def close_lootbug_popup(dev) -> None:
     frame = dev.capture()
     if screens.identify(frame) != LOOTBUG_POPUP:
         raise JobAborted("expected lootbug popup before closing", frame)
-    press_anchor(dev, "lootbug_close", frame)
+    dev.press(*screens.lootbug_close(frame).center)
     if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
         raise JobAborted("lootbug popup did not close", dev.capture())
 
@@ -326,7 +326,8 @@ class CloudSync:
     another device has uploaded: the bot sets "cloud_conflict" and stops
     playing/uploading until resolved (python -m obelisk cloud --keep-pi, or a
     download once the cloud has more play time). The game itself only enables
-    Download when the cloud save has MORE play time than this device's.
+    Download when the cloud save has MORE play time than this device's, and
+    not when that save comes from a different game version (see _version_block).
 
     Upload = two presses (red -> orange "armed" -> upload), verified by the
     cloud play time changing; Download is never pressed (not automated).
@@ -374,6 +375,43 @@ class CloudSync:
                     "longer and download it)", why)
         return "conflict"
 
+    def _version_block(self, frame) -> "str | None":
+        """Why the game refuses a cloud save with more play time, or None.
+
+        The cloud having more play time normally enables Download. If it stays
+        greyed out, the saves' game versions are the known cause (2026-11-05:
+        iPhone v2.2.52, Pi v2.2.51; updating the Pi enabled it). No --keep-pi
+        or longer play on the phone can fix that, only updating the game."""
+        from .playtime import (CLOUD_ROW, CLOUD_VERSION_ROW, LOCAL_ROW, LOCAL_VERSION_ROW,
+                               read_seconds, read_version)
+        cloud_v = read_version(frame, CLOUD_VERSION_ROW)
+        local_v = read_version(frame, LOCAL_VERSION_ROW)
+        if cloud_v is not None and cloud_v == local_v:
+            return None
+        cloud_t, local_t = read_seconds(frame, CLOUD_ROW), read_seconds(frame, LOCAL_ROW)
+        if cloud_t is None or local_t is None or cloud_t <= local_t:
+            return None
+        if cloud_v is None or local_v is None:
+            return "the game refuses the cloud save, probably a game version difference"
+        shown = (".".join(map(str, cloud_v)), ".".join(map(str, local_v)))
+        return "the cloud save is from game v%s but the Pi's save is from v%s" % shown
+
+    def _version_blocked(self, frame, why: str) -> str:
+        if not self.state.get("cloud_version_block"):
+            shot = save_failure(frame, "cloud_version_block")
+            from .notify import alert
+            alert("cloud_version_block", "Obelisk bot: update the game",
+                  f"{why}, so the game greys out Download. The bot is paused and "
+                  "nothing was overwritten. Update whichever device has the older "
+                  "version (Pi: Play Store); the next session then loads the cloud "
+                  "save by itself. Don't use --keep-pi.",
+                  priority="high", tags="warning,cloud", state=self.state, image=shot)
+        self.state.set("cloud_version_block", why)
+        self.state.set("cloud_conflict", why)
+        log.warning("cloud: VERSION BLOCK (%s). Not playing or uploading until the game "
+                    "is updated", why)
+        return "conflict"
+
     def _autosave_off(self, dev, frame):
         """Loading a save restores its settings, incl. Cloud Auto-Save = on;
         uploads must only come from this bot's checked path."""
@@ -390,7 +428,16 @@ class CloudSync:
         from .playtime import CLOUD_ROW, read_seconds
         frame = self._autosave_off(dev, frame)
         last = self.state.get("cloud_last_upload")
-        if screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled":
+        download_on = screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled"
+        blocked = None if download_on else self._version_block(frame)
+        if blocked:
+            return self._version_blocked(frame, blocked)
+        if self.state.get("cloud_version_block"):
+            # the versions match again: judge the saves afresh
+            log.info("cloud: version block over")
+            self.state.set("cloud_version_block", None)
+            self.state.set("cloud_conflict", None)
+        if download_on:
             cloud_t = read_seconds(frame, CLOUD_ROW)
             if cloud_t is not None and last is not None and cloud_t == last:
                 # our own upload; the Pi's stored local save just lags behind it
