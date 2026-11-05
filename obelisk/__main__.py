@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
-import logging.handlers
 import sys
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from .device import Device
 from .jobs import (CloudSync, FounderJob, FreebieJob, JobAborted, LootbugJob, LootbugPopupInterrupt,
                    AnrInterrupt, MenuCloseInterrupt,
                    OfflineGainsInterrupt, save_failure)
+from .logfile import SharedDailyLog
 from .session import SessionPlanner
 from .scheduler import Scheduler
 
@@ -33,14 +33,12 @@ LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "obelisk.log"
 
 def setup_logging() -> None:
     LOG_FILE.parent.mkdir(exist_ok=True)
-    # rotate at midnight, keep 60 days (obelisk.log.YYYY-MM-DD); the daily
-    # summary reads the current and rotated files
-    file_handler = logging.handlers.TimedRotatingFileHandler(
-        LOG_FILE, when="midnight", backupCount=60, encoding="utf-8")
+    # rotates daily, keeps 60 days (obelisk.log.YYYY-MM-DD); the daily summary
+    # reads the current and rotated files
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(), file_handler],
+        handlers=[logging.StreamHandler(), SharedDailyLog(LOG_FILE)],
     )
 
 

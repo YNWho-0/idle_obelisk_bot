@@ -8,6 +8,9 @@ The layout-v1 suite is kept in legacy/tests_v1/ for reference.
 
 from __future__ import annotations
 
+import datetime as dt
+import logging
+import os
 import sys
 import tempfile
 import traceback
@@ -26,6 +29,7 @@ from obelisk import screens                        # noqa: E402
 from obelisk.jobs import (CloudSync, FounderJob, FreebieJob, JobAborted,  # noqa: E402
                           AnrInterrupt, LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt,
                           OfflineGainsInterrupt)
+from obelisk.logfile import SharedDailyLog         # noqa: E402
 from obelisk.scheduler import Scheduler           # noqa: E402
 from obelisk.session import SessionPlanner        # noqa: E402
 
@@ -466,6 +470,59 @@ def test_keep_pi_refuses_during_a_version_block():
     st.set("cloud_version_block", None)
     st.set("cloud_conflict", None)
     st.set("cloud_last_upload", None)
+
+
+# ---------------------------------------------------------------- shared log file
+
+def _log_record(msg: str) -> logging.LogRecord:
+    return logging.LogRecord("t", logging.INFO, __file__, 1, msg, None, None)
+
+
+def _age_file(path: Path, days: int) -> dt.date:
+    when = dt.datetime.now() - dt.timedelta(days=days)
+    os.utime(path, (when.timestamp(), when.timestamp()))
+    return when.date()
+
+
+def test_log_rotated_by_another_process_does_not_strand_the_bot():
+    folder = Path(tempfile.mkdtemp(dir=_TMP))
+    path = folder / "obelisk.log"
+    bot, command = SharedDailyLog(path), SharedDailyLog(path)
+    bot.emit(_log_record("bot yesterday"))
+    day = _age_file(path, 1)
+    command.emit(_log_record("command today"))               # rotates
+    bot.emit(_log_record("bot today"))
+    bot.close(), command.close()
+    assert (folder / f"obelisk.log.{day}").read_text().split() == ["bot", "yesterday"]
+    assert path.read_text().splitlines() == ["command today", "bot today"]
+
+
+def test_log_rotation_keeps_an_existing_file_for_that_day():
+    folder = Path(tempfile.mkdtemp(dir=_TMP))
+    path = folder / "obelisk.log"
+    log = SharedDailyLog(path)
+    log.emit(_log_record("later"))
+    day = _age_file(path, 1)
+    (folder / f"obelisk.log.{day}").write_text("earlier\n")
+    log.emit(_log_record("today"))
+    log.close()
+    assert (folder / f"obelisk.log.{day}").read_text().splitlines() == ["earlier", "later"]
+    assert path.read_text().splitlines() == ["today"]
+
+
+def test_log_rotation_removes_only_files_past_the_limit():
+    folder = Path(tempfile.mkdtemp(dir=_TMP))
+    path = folder / "obelisk.log"
+    today = dt.date.today()
+    expired = folder / f"obelisk.log.{today - dt.timedelta(days=61)}"
+    kept = folder / f"obelisk.log.{today - dt.timedelta(days=60)}"
+    expired.write_text("old\n"), kept.write_text("kept\n")
+    log = SharedDailyLog(path)
+    log.emit(_log_record("yesterday"))
+    _age_file(path, 1)
+    log.emit(_log_record("today"))
+    log.close()
+    assert not expired.exists() and kept.exists()
 
 
 # ---------------------------------------------------------------- scheduler / sessions

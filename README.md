@@ -140,7 +140,7 @@ Options screen open).
 
 ```
 obelisk/      bot package (device, vision, screens, jobs, scheduler, session,
-              gems, playtime, notify, summary, CLI)
+              gems, playtime, notify, summary, logfile, CLI)
 obelisk/anchors/   templates and glyph samples (generated; see scripts/)
 screens/      layout-v2 reference screenshots (anchors and tests are cut from them)
 scripts/      make_anchors, make_wiki_lootbugs, make_gem_digits,
