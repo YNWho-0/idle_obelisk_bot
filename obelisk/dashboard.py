@@ -182,7 +182,7 @@ def collect() -> dict:
     keep_left = (keep_until - dt.datetime.now().timestamp()) / 60 if keep_until else 0
     events = [r for r in rows if "device: press" not in r[2] + r[3]
               and not r[3].startswith(("gem guard", "interrupt: offline"))][-40:]
-    failures = sorted((p for p in (LOGS / "failures").glob("*.png")), reverse=True)[:12]
+    failures = sorted((p for p in (LOGS / "failures").glob("*.png")), reverse=True)
     reports = sorted((p.stem for p in (LOGS / "daily").glob("*.txt")), reverse=True)
     return {
         "now": dt.datetime.now(),
@@ -199,7 +199,8 @@ def collect() -> dict:
         "cloud_version_block": st.get("cloud_version_block"),
         "cloud_last": fmt_playtime(st.get("cloud_last_upload")),
         "events": events,
-        "failures": [p.name for p in failures],
+        "failures": [p.name for p in failures[:12]],
+        "failures_today": sum(p.name.startswith(today.strftime("%Y%m%d")) for p in failures),
         "reports": reports,
         "paused_until": st.get("paused_until"),
         "session_now": st.get("session_now"),
@@ -353,7 +354,7 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
   <div class="tile"><b>{{ d.freebie }}</b><span>freebie claims</span></div>
   <div class="tile"><b>{{ d.sessions_today }}</b><span>sessions</span></div>
   <div class="tile"><b>{{ '%.1f' % d.online_today_min }}</b><span>min in front</span></div>
-  <div class="tile"><b>{{ d.failures|length }}</b><span>failure shots</span></div>
+  <div class="tile"><b>{{ d.failures_today }}</b><span>failure shots</span></div>
  </div>
  <p style="margin:10px 0 0"><a href="report/today">Today's full report →</a></p>
 </div>

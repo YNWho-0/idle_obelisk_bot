@@ -233,6 +233,7 @@ class Scheduler:
         self.off_mining_since, self.stuck_restarts = None, 0
         State().set("last_session_at", self.planner.started)
         log.info("session start")
+        self.note_game_version()
         for job in self.jobs:                 # banked while offline: look right away
             if job.name == "freebie":
                 job.last_run = float("-inf")
@@ -257,6 +258,23 @@ class Scheduler:
                 log.warning("keep-open: cancelled by the cloud save conflict")
                 State().set("keep_open_until", None)
             self.end_session(upload=False)
+
+    def note_game_version(self) -> None:
+        """Say when the game updates: the update of 2026-11-05 moved a button by
+        about 1 px and left the bot stuck on a popup."""
+        version = self.dev.game_version()
+        st = State()
+        old = st.get("game_version")
+        if version is None or version == old:
+            return
+        st.set("game_version", version)
+        if old is None:
+            return
+        log.warning("the game was updated: v%s -> v%s", old, version)
+        alert("game_updated", f"Obelisk bot: game updated to v{version}",
+              f"It was v{old}. The bot carries on, but updates can move buttons. If failure "
+              "alerts follow, the bot's screen templates probably need updating.",
+              tags="arrow_up", force=True)
 
     SETTLE_TIMEOUT = 60
 

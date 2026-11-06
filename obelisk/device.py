@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import time
 
@@ -117,6 +118,16 @@ class Device:
             if "topResumedActivity" in line or "mResumedActivity" in line:
                 return f"{PACKAGE}/" in line
         return False
+
+    def game_version(self) -> "str | None":
+        """Installed version, e.g. '2.2.52'; None if it can't be read."""
+        try:
+            out = self._adb("shell", "dumpsys", "package", PACKAGE).decode(errors="replace")
+        except DeviceError as e:
+            log.debug("could not read the game version: %s", e)
+            return None
+        m = re.search(r"versionName=(\S+)", out)
+        return m.group(1) if m else None
 
     def go_home(self) -> None:
         """Send the game to the background (it then counts as offline)."""

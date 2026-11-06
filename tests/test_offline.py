@@ -127,6 +127,7 @@ class FakeDevice:
         self.presses: list[tuple[str, tuple[int, int]]] = []
         self.in_front, self.after_launch = in_front, after_launch
         self.launches = self.homes = 0
+        self.version = "2.2.52"
 
     def capture(self) -> np.ndarray:
         name = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
@@ -167,6 +168,9 @@ class FakeDevice:
     def go_home(self):
         self.homes += 1
         self.in_front = False
+
+    def game_version(self):
+        return self.version
 
 
 # ---------------------------------------------------------------- detection
@@ -357,6 +361,7 @@ def test_popup_interrupt_only_presses_x():
 
 def test_cloud_turns_autosave_off_and_uploads():
     st = _jobs.State(_TMP / "c1.json")
+    st.set("cloud_last_upload", 490845)
     dev = FakeDevice("crate_gone", {
         "crate_gone": [(GRID_BTN, ["grid"])],
         "grid": [(GRID_CLOUD, ["cloud"])],
@@ -369,6 +374,48 @@ def test_cloud_turns_autosave_off_and_uploads():
     assert st.get("cloud_last_upload") == (5 * 24 + 16) * 3600 + 25 * 60 + 41
     assert [p[0] for p in dev.presses] == ["crate_gone", "grid", "cloud", "cloud_autosave_off",
                                            "cloud_armed", "cloud_uploaded"]
+
+
+def test_lost_state_never_overwrites_the_cloud_save():
+    st = _jobs.State(_TMP / "lost.json")                     # no record of the last upload
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_autosave_off"])],
+        "cloud_autosave_off": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).upload(dev) == "conflict" and st.get("cloud_conflict")
+    assert not any(inside(p[1], UPLOAD_BTN) for p in dev.presses)
+    assert _jobs.keep_pi_save(st) is None                    # the user's explicit choice
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_autosave_off"])],
+        "cloud_autosave_off": [(UPLOAD_BTN, ["cloud_armed"])],
+        "cloud_armed": [(UPLOAD_BTN, ["cloud_uploaded"])],
+        "cloud_uploaded": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).upload(dev) == "uploaded"
+    assert st.get("cloud_last_upload") == 491141 and st.get("cloud_upload_allowed") is None
+
+
+def test_unreadable_time_after_an_upload_is_read_at_the_next_visit():
+    st = _jobs.State(_TMP / "unread.json")
+    st.set("cloud_last_upload", 490845)
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_autosave_off"])],
+        "cloud_autosave_off": [(UPLOAD_BTN, ["cloud_armed"])],
+        "cloud_armed": [(UPLOAD_BTN, ["cloud_uploaded"])],
+        "cloud_uploaded": [(STORE_X, ["store_closed"])],
+    })
+    real = _pt.read_seconds
+    _pt.read_seconds = lambda f, row: None if f is FRAMES["cloud_uploaded"] and row == _pt.CLOUD_ROW else real(f, row)
+    try:
+        assert CloudSync(st).upload(dev) == "uploaded"
+    finally:
+        _pt.read_seconds = real
+    assert st.get("cloud_last_upload") == 490845 and st.get("cloud_upload_unverified")
+    assert CloudSync(st).check(_cloud_visit("cloud_uploaded")) != "conflict"
+    assert st.get("cloud_last_upload") == 491141
 
 
 def _cloud_visit(screen, **more):
@@ -628,6 +675,84 @@ def test_state_never_writes_back_stale_values():
     b.set("paused_until", None)                  # e.g. the dashboard resumes
     a.set("cloud_last_upload", 1)                # a long-lived State writes another key
     assert b.get("paused_until") is None and b.get("cloud_last_upload") == 1
+
+
+def test_state_writers_do_not_undo_each_other():
+    import threading
+    path = _TMP / "busy.json"
+    def writer(n):
+        st = _jobs.State(path)
+        for i in range(10):
+            st.set(f"k{n}_{i}", i)
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(_jobs.State(path).data) == 60                 # none lost
+    assert not path.with_suffix(".tmp").exists()
+
+
+def test_corrupt_state_is_survivable():
+    path = _TMP / "corrupt.json"
+    path.write_text('{"cloud_last_up')
+    st = _jobs.State(path)
+    assert st.get("cloud_last_upload") is None
+    st.set("a", 1)
+    assert st.get("a") == 1
+
+
+def test_game_update_alerts_once_per_change():
+    import obelisk.scheduler as sc
+    sent = []
+    orig = sc.alert
+    sc.alert = lambda key, title, *a, **k: sent.append(title) or True
+    st = _jobs.State(); st.set("game_version", None)
+    try:
+        dev = FakeDevice("no_bugs", {})
+        s = Scheduler(dev, [], poll=0)
+        s.note_game_version()
+        assert st.get("game_version") == "2.2.52" and sent == []   # first look: nothing to compare
+        s.note_game_version()
+        assert sent == []
+        dev.version = "2.2.53"
+        s.note_game_version()
+        s.note_game_version()
+        assert len(sent) == 1 and "2.2.53" in sent[0] and st.get("game_version") == "2.2.53"
+        dev.version = None                                         # unreadable: not a change
+        s.note_game_version()
+        assert len(sent) == 1 and st.get("game_version") == "2.2.53"
+    finally:
+        sc.alert = orig
+        st.set("game_version", None)
+
+
+def test_device_reads_the_game_version():
+    import obelisk.device as d
+    dev = d.Device()
+    dev._adb = lambda *a, **k: b"    versionCode=2002052 minSdk=23\n    versionName=2.2.52\n"
+    assert dev.game_version() == "2.2.52"
+    dev._adb = lambda *a, **k: b"nothing useful"
+    assert dev.game_version() is None
+    dev._adb = lambda *a, **k: (_ for _ in ()).throw(d.DeviceError("offline"))
+    assert dev.game_version() is None
+
+
+def test_dashboard_failure_tile_counts_today_only():
+    import obelisk.dashboard as D
+    logs, D.LOGS = D.LOGS, _TMP / "tile"
+    try:
+        (D.LOGS / "failures").mkdir(parents=True)
+        for n in range(14):
+            (D.LOGS / "failures" / f"20200101-0000{n:02d}_old.png").write_bytes(b"x")
+        today = dt.date.today().strftime("%Y%m%d")
+        for n in range(2):
+            (D.LOGS / "failures" / f"{today}-0000{n:02d}_new.png").write_bytes(b"x")
+        d = D.collect()
+        assert d["failures_today"] == 2 and len(d["failures"]) == 12
+        assert d["failures"][0].startswith(today)                  # gallery: newest first
+    finally:
+        D.LOGS = logs
 
 
 def test_alerts_are_deduplicated_and_never_raise():
@@ -970,8 +1095,8 @@ def test_dashboard_keep_pi_button():
         assert 'value="keep_pi"' in c.get("/").get_data(as_text=True)
         assert c.post("/control", data={"a": "keep_pi"}).status_code == 303
         assert st.get("cloud_conflict") is None and st.get("cloud_last_upload") is None
-        assert st.get("session_now") is True
-        st.set("session_now", None)
+        assert st.get("session_now") is True and st.get("cloud_upload_allowed") is True
+        st.set("session_now", None); st.set("cloud_upload_allowed", None)
     finally:
         D.LOGS = logs
 

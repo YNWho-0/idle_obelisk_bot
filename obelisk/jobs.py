@@ -3,8 +3,10 @@ followed by waiting for the expected result; anything unexpected aborts."""
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -262,9 +264,11 @@ class FounderJob:
 
 
 class State:
-    """Tiny persistent key/value store (logs/state.json), shared by the bot and
-    the dashboard. Every get/set re-reads the file, so a long-lived State never
-    writes back stale values (it once re-paused the bot after a resume)."""
+    """Tiny persistent key/value store (logs/state.json), shared by the bot, the
+    dashboard and the timers. Every get/set re-reads the file, so a long-lived State
+    never writes back stale values (it once re-paused the bot after a resume).
+    Writes take a lock, so two processes can't undo each other's change, and are
+    flushed to disk before the rename, so a power cut leaves the old or new file."""
 
     PATH = Path(__file__).resolve().parent.parent / "logs" / "state.json"
 
@@ -274,7 +278,10 @@ class State:
     def _load(self) -> dict:
         try:
             return json.loads(self.path.read_text())
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:
+            log.error("could not read %s: %s", self.path.name, e)
             return {}
 
     @property
@@ -285,13 +292,23 @@ class State:
         return self._load().get(key, default)
 
     def set(self, key, value) -> None:
-        data = self._load()
-        data[key] = value
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=1))
-            tmp.replace(self.path)
+            with open(self.path.with_suffix(".lock"), "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)        # released when the file closes
+                data = self._load()
+                data[key] = value
+                tmp = self.path.with_suffix(".tmp")
+                with open(tmp, "w") as f:
+                    f.write(json.dumps(data, indent=1))
+                    f.flush()
+                    os.fsync(f.fileno())
+                tmp.replace(self.path)
+                folder = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(folder)
+                finally:
+                    os.close(folder)
         except OSError as e:
             log.warning("could not save state: %s", e)
 
@@ -329,6 +346,7 @@ def keep_pi_save(state: State) -> "str | None":
     state.set("cloud_conflict", None)
     state.set("cloud_last_upload", None)
     state.set("cloud_upload_unverified", None)
+    state.set("cloud_upload_allowed", True)     # the one way past "no record of the last upload"
     return None
 
 
@@ -466,6 +484,7 @@ class CloudSync:
         if window[0] <= cloud_t <= window[1]:
             log.info("cloud: the unverified upload did arrive (cloud play time %ds)", cloud_t)
             self.state.set("cloud_last_upload", cloud_t)
+            self.state.set("cloud_upload_allowed", None)
         self.state.set("cloud_upload_unverified", None)
 
     def _decide(self, dev, frame, upload: bool) -> str:
@@ -499,6 +518,11 @@ class CloudSync:
             log.warning("cloud: couldn't read the cloud play time; not uploading this session")
             save_failure(frame, "cloud_time_unreadable")
             return "unreadable"
+        if last is None and not self.state.get("cloud_upload_allowed"):
+            # e.g. state.json lost: without the record, the check that protects
+            # another device's save can't work, so nothing may be overwritten
+            return self._conflict(frame, "the bot has no record of its last upload, so it can't "
+                                         "tell whether the cloud save is safe to overwrite")
         if last is not None and cloud_t != last:
             return self._conflict(frame, f"cloud play time {cloud_t}s != this bot's last upload {last}s")
         up = screens.cloud_button(frame, CLOUD_UPLOAD)
@@ -517,22 +541,27 @@ class CloudSync:
         done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before),
                         timeout=self.UPLOAD_WAIT)
         if done is None:
-            if local_t is not None:     # for _adopt_late_upload at the next visit
-                self.state.set("cloud_upload_unverified",
-                               [local_t - self.LATE_UPLOAD_SLACK,
-                                local_t + self.UPLOAD_WAIT + self.LATE_UPLOAD_SLACK])
+            self._remember_attempt(local_t)
             raise JobAborted("cloud: upload not verified (cloud time unchanged)", dev.capture())
         self.state.set("cloud_upload_unverified", None)
         dev.sleep(0.5)
         new_t = read_seconds(dev.capture(), CLOUD_ROW)
-        self.state.set("cloud_last_upload", new_t)
         if new_t is None:
-            log.warning("cloud: uploaded, but couldn't read the new cloud play time; "
-                        "next session can't compare (no conflict check that once)")
+            log.warning("cloud: uploaded, but couldn't read the new cloud play time")
             save_failure(done, "cloud_time_unreadable_after_upload")
+            self._remember_attempt(local_t)     # the next visit reads it instead
         else:
+            self.state.set("cloud_last_upload", new_t)
+            self.state.set("cloud_upload_allowed", None)
             log.info("cloud: uploaded (cloud play time now %ds)", new_t)
         return "uploaded"
+
+    def _remember_attempt(self, local_t: "int | None") -> None:
+        """For _adopt_late_upload at the next visit."""
+        if local_t is not None:
+            self.state.set("cloud_upload_unverified",
+                           [local_t - self.LATE_UPLOAD_SLACK,
+                            local_t + self.UPLOAD_WAIT + self.LATE_UPLOAD_SLACK])
 
     def _download(self, dev, frame, cloud_t: int) -> str:
         """Another device uploaded MORE play time: load it (the user's rule:
@@ -549,6 +578,7 @@ class CloudSync:
         if loaded is None:
             raise JobAborted("cloud: game did not reload after Download", dev.capture())
         self.state.set("cloud_last_upload", cloud_t)
+        self.state.set("cloud_upload_allowed", None)
         self.state.set("cloud_conflict", None)
         alert("cloud_download", "Obelisk bot: loaded your newer save from the cloud",
               f"Another device (e.g. your iPhone) uploaded a save with more play time "

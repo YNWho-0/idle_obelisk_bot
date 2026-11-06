@@ -68,6 +68,9 @@ game only enables Download when the cloud save has more play time). Loading a
 save restores that save's settings, including Cloud Auto-Save, which the bot
 turns off again.
 
+**No record of the last upload** (e.g. `logs/state.json` lost): the bot can't run
+this check, so it reports a conflict rather than risk overwriting anything.
+
 **Slow uploads:** an upload not confirmed within 45 s counts as a failure, but it
 may still arrive. If the next session finds a cloud time within 2 min of the Pi's
 play time at that attempt, it treats it as the Pi's own upload, not a conflict.
@@ -115,6 +118,8 @@ good session.
 * **Stopping**: when the bot stops itself the game goes to the background first,
   so it doesn't burn buffs. A force-stop always follows HOME and a 30 s wait, since
   the game saves on HOME.
+* **Game updates**: each session compares the installed game version with the last
+  one seen and alerts the phone if it changed, since updates can move buttons.
 * **Founder diagnostics**: a session with no crate saves its last frame to
   `logs/founder_empty/` (newest 100), to find crates the bot doesn't recognise.
 * **Lootbug skins**: in-game crops plus masked templates of all 14 skins
