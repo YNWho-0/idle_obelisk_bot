@@ -21,8 +21,10 @@ ANR = "android_not_responding"
 # 2026-11-01 save reload. v1 values are in git history / screens/v1layout.
 
 # Where the Store's "Freebie Pack" header may be (Store scroll position varies:
-# it has opened both at the top and at the Resource Packs).
-FREEBIE_BAND: Box = (100, 130, 360, 1170)
+# it has opened both at the top and at the Resource Packs). The Store only scrolls
+# up and down, so the header stays at x=137; keeping to that column rules out other
+# "Freebie Pack" text, e.g. "+1% Freebie Pack Skill Bit Chance!" (x=194, score 0.92).
+FREEBIE_BAND: Box = (131, 130, 303, 1170)
 # Claim button relative to the header's top-left: header (137,624) -> claim (550,665).
 CLAIM_OFFSET = (413, 41)
 CLAIM_SIZE = (94, 61)
@@ -56,7 +58,10 @@ class A:
             "store_icon_full": dict(home=(594, 1192, 634, 1226), threshold=0.85),
             "store_close":    dict(home=(414, 1188, 466, 1234)),
             "loot_tables":    dict(home=(553, 89, 663, 124)),
-            "freebie_header": dict(home=(137, 624, 297, 651), search=FREEBIE_BAND),
+            # 1.0 on even rows, 0.89 on odd ones (the text draws differently); all
+            # four chances landing on odd rows lost the job 2 of 42 visits. Other
+            # text in this column scores <= 0.59.
+            "freebie_header": dict(home=(137, 624, 297, 651), search=FREEBIE_BAND, threshold=0.85),
             "claim_ready":    dict(home=(550, 665, 644, 726), threshold=0.85),
             "claim_empty":    dict(home=(550, 665, 644, 726), threshold=0.85),
             "lootbug_header": dict(home=(250, 128, 420, 154), margin=20, threshold=0.85),

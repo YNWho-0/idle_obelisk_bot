@@ -95,6 +95,8 @@ F = {
     "cloud_version_block": "n104_cloud_version_block.png",  # cloud v2.2.52, Pi v2.2.51: both greyed
     "cloud_same_version": "n105_cloud_same_version.png",    # both v2.2.52: Download enabled
     "bug_popup_v2252": "n106_lootbug_popup_v2252.png",      # X icon about 1 px off the older one
+    "store_odd_y": "n107_store_row_odd_y.png",              # Freebie row on an odd y: header 0.89
+    "store_false_header": "n108_store_top_false_header.png",  # "+1% Freebie Pack ..." text, no row
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -197,6 +199,25 @@ def test_freebie_states():
     assert screens.freebie_state(FRAMES["store_toast"])[0] == "unknown"
     assert screens.freebie_state(FRAMES["store_empty"])[0] == "empty"
     assert screens.freebie_state(FRAMES["store_top"])[0] == "unknown"    # row not visible
+
+
+def test_freebie_row_found_on_odd_rows_but_not_in_other_text():
+    state, claim = screens.freebie_state(FRAMES["store_odd_y"])
+    assert state == "ready" and claim.box[:2] == (550, 838)       # 41 below the header at y=797
+    assert screens.freebie_state(FRAMES["store_false_header"]) == ("unknown", None)
+    assert screens.A.get("freebie_header").find(FRAMES["store_false_header"]) is None
+
+
+def test_freebie_job_finds_the_row_on_an_odd_row_after_scrolling():
+    dev = FakeDevice("no_bugs", {
+        "no_bugs": [(STORE_ICON, ["store_false_header"])],
+        ("store_false_header", "swipe"): ["store_odd_y"],
+        "store_odd_y": [((550, 838, 644, 905), ["store_empty"])],
+        "store_empty": [(STORE_X, ["store_closed"])],
+    })
+    dev.script[("store_false_header", "swipe")] = ["store_odd_y"]
+    assert FreebieJob().run(dev) == "claimed"
+    assert [p[0] for p in dev.presses] == ["no_bugs", "store_odd_y", "store_empty"]
 
 
 def test_gem_button_in_claim_slot_is_never_ready():
