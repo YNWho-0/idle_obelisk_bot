@@ -366,6 +366,63 @@ def test_cloud_turns_autosave_off_and_uploads():
                                            "cloud_armed", "cloud_uploaded"]
 
 
+def _cloud_visit(screen, **more):
+    """Mining -> grid -> the given Cloud screen; the X closes it."""
+    return FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, [screen])],
+        screen: [(STORE_X, ["store_closed"])],
+        **more,
+    })
+
+
+def test_late_upload_is_the_pis_own_not_a_conflict():
+    st = _jobs.State(_TMP / "late.json")
+    st.set("cloud_last_upload", 490845)
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_autosave_off"])],
+        "cloud_autosave_off": [(UPLOAD_BTN, ["cloud_armed"])],
+        "cloud_armed": [(UPLOAD_BTN, ["cloud_armed"]), (STORE_X, ["store_closed"])],
+    })
+    sync = CloudSync(st); sync.UPLOAD_WAIT = 0.01
+    try:
+        sync.upload(dev)
+        raise AssertionError("an unconfirmed upload must count as a failure")
+    except JobAborted as e:
+        assert "not verified" in str(e)
+    assert st.get("cloud_last_upload") == 490845 and st.get("cloud_upload_unverified")
+    # next session: the cloud shows 491141 (the Pi's local save read 491099 at the attempt)
+    assert CloudSync(st).check(_cloud_visit("cloud_uploaded")) != "conflict"
+    assert st.get("cloud_last_upload") == 491141
+    assert st.get("cloud_upload_unverified") is None and not st.get("cloud_conflict")
+
+
+def test_unverified_upload_never_hides_another_devices_save():
+    st = _jobs.State(_TMP / "late2.json")
+    st.set("cloud_last_upload", 490845)
+    st.set("cloud_upload_unverified", [1000, 2000])       # 491141 is far outside the window
+    dev = _cloud_visit("cloud_uploaded")
+    assert CloudSync(st).check(dev) == "conflict" and st.get("cloud_conflict")
+    assert st.get("cloud_last_upload") == 490845 and st.get("cloud_upload_unverified") is None
+    assert not any(p[0] == "cloud_uploaded" and inside(p[1], UPLOAD_BTN) for p in dev.presses)
+
+
+def test_upload_that_never_arrived_is_retried_normally():
+    st = _jobs.State(_TMP / "late3.json")
+    st.set("cloud_last_upload", 490845)
+    st.set("cloud_upload_unverified", [490000, 492000])   # cloud time still the old one
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_autosave_off"])],
+        "cloud_autosave_off": [(UPLOAD_BTN, ["cloud_armed"])],
+        "cloud_armed": [(UPLOAD_BTN, ["cloud_uploaded"])],
+        "cloud_uploaded": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).upload(dev) == "uploaded"
+    assert st.get("cloud_last_upload") == 491141 and st.get("cloud_upload_unverified") is None
+
+
 DOWNLOAD_BTN = (470, 402, 598, 455)
 
 

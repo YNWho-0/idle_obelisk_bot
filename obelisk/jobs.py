@@ -334,6 +334,8 @@ class CloudSync:
     """
 
     name = "cloud"
+    UPLOAD_WAIT = 45.0        # s to see the cloud time change (usually ~3 s)
+    LATE_UPLOAD_SLACK = 120   # s of play time either side of the Pi's when judging a late upload
 
     def __init__(self, state: "State | None" = None):
         self.state = state if state is not None else State()
@@ -424,9 +426,27 @@ class CloudSync:
             raise JobAborted("cloud: could not turn Cloud Auto-Save off", dev.capture())
         return off
 
-    def _decide(self, dev, frame, upload: bool) -> str:
+    def _adopt_late_upload(self, frame) -> None:
+        """An upload can land after UPLOAD_WAIT (2026-11-06: the next session then
+        saw an unknown cloud time and raised a false conflict). If the cloud time
+        now fits the Pi's play time at that attempt, it is the Pi's own upload;
+        anything else goes through the normal checks."""
         from .playtime import CLOUD_ROW, read_seconds
+        window = self.state.get("cloud_upload_unverified")
+        if not window:
+            return
+        cloud_t = read_seconds(frame, CLOUD_ROW)
+        if cloud_t is None or cloud_t == self.state.get("cloud_last_upload"):
+            return                      # unreadable or nothing arrived: a later visit decides
+        if window[0] <= cloud_t <= window[1]:
+            log.info("cloud: the unverified upload did arrive (cloud play time %ds)", cloud_t)
+            self.state.set("cloud_last_upload", cloud_t)
+        self.state.set("cloud_upload_unverified", None)
+
+    def _decide(self, dev, frame, upload: bool) -> str:
+        from .playtime import CLOUD_ROW, LOCAL_ROW, read_seconds
         frame = self._autosave_off(dev, frame)
+        self._adopt_late_upload(frame)
         last = self.state.get("cloud_last_upload")
         download_on = screens.cloud_button(frame, CLOUD_DOWNLOAD) != "disabled"
         blocked = None if download_on else self._version_block(frame)
@@ -460,6 +480,7 @@ class CloudSync:
             return "in_sync" if up == "disabled" else "local_newer"
         x1, y1, x2, y2 = CLOUD_TIME
         before = frame[y1:y2, x1:x2].copy()
+        local_t = read_seconds(frame, LOCAL_ROW)
         dev.press(*_center(CLOUD_UPLOAD))
         armed = wait_for(dev, lambda f: screens.cloud_button(f, CLOUD_UPLOAD) == "armed", timeout=3)
         if armed is None:
@@ -467,9 +488,15 @@ class CloudSync:
         if screens.cloud_button(armed, CLOUD_DOWNLOAD) != "disabled":
             raise JobAborted("cloud: Download became active; not uploading", armed)
         dev.press(*_center(CLOUD_UPLOAD))
-        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before), timeout=12)
+        done = wait_for(dev, lambda f: not np.array_equal(f[y1:y2, x1:x2], before),
+                        timeout=self.UPLOAD_WAIT)
         if done is None:
+            if local_t is not None:     # for _adopt_late_upload at the next visit
+                self.state.set("cloud_upload_unverified",
+                               [local_t - self.LATE_UPLOAD_SLACK,
+                                local_t + self.UPLOAD_WAIT + self.LATE_UPLOAD_SLACK])
             raise JobAborted("cloud: upload not verified (cloud time unchanged)", dev.capture())
+        self.state.set("cloud_upload_unverified", None)
         dev.sleep(0.5)
         new_t = read_seconds(dev.capture(), CLOUD_ROW)
         self.state.set("cloud_last_upload", new_t)

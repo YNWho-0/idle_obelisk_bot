@@ -61,6 +61,10 @@ game only enables Download when the cloud save has more play time). Loading a
 save restores that save's settings, including Cloud Auto-Save, which the bot
 turns off again.
 
+**Slow uploads:** an upload not confirmed within 45 s counts as a failure, but it
+may still arrive. If the next session finds a cloud time within 2 min of the Pi's
+play time at that attempt, it treats it as the Pi's own upload, not a conflict.
+
 **Game versions:** if the cloud save has more play time but comes from a
 different game version, the game greys out Download. The bot then alerts "update
 the game" and skips sessions. Update the older device (Pi: Play Store); the next
