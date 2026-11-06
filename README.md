@@ -44,6 +44,10 @@ normal session restarts it, checks the cloud and uploads. A phone save with more
 play time uploaded in the meantime wins as usual, so the Pi's progress from the
 mode is then lost. A cloud conflict cancels the mode.
 
+If the game sits off the mining screen for 5 min during the mode, the bot restarts
+it. After 3 restarts in a row that don't help, it ends the mode to save buffs and
+alerts the phone.
+
 ## Cloud saves (policy: never overwrite another device's progress)
 
 After each upload the bot remembers the cloud play time. If the cloud later
@@ -54,6 +58,9 @@ marks a **conflict**, skips sessions and alerts the phone until resolved:
 venv/bin/python -m obelisk cloud --status
 venv/bin/python -m obelisk cloud --keep-pi   # the Pi's save wins at the next session
 ```
+
+The dashboard's Cloud row has the same **Keep the Pi save** button; it also runs a
+session right away. An open conflict alerts again every 6 h.
 
 To keep the phone's save instead, play long enough on the phone that its play
 time passes the Pi's, upload, and download it on the Pi (by hand for now; the
@@ -101,8 +108,15 @@ good session.
 * **One scheduler** (`obelisk/scheduler.py`): popups are interrupts, then the
   first due job runs (founder → lootbug → freebie), only from the mining
   screen; a watchdog relaunches the game if it isn't in front during a session.
-* **Gem guard**: the gem counter is read before and after every job (strict
-  digit matching; unknown digits → skip, never guess); a drop stops the bot.
+* **Gem guard**: the gem counter is read before and after every job and at the
+  end of the session, so popups and cloud steps are covered too (strict digit
+  matching; it retries for 6 s, then skips, never guesses); a drop stops the bot.
+  A new session starts a new baseline, so spending on the phone doesn't count.
+* **Stopping**: when the bot stops itself the game goes to the background first,
+  so it doesn't burn buffs. A force-stop always follows HOME and a 30 s wait, since
+  the game saves on HOME.
+* **Founder diagnostics**: a session with no crate saves its last frame to
+  `logs/founder_empty/` (newest 100), to find crates the bot doesn't recognise.
 * **Lootbug skins**: in-game crops plus masked templates of all 14 skins
   (7 regular + 7 golden) from a wiki screenshot (`scripts/make_wiki_lootbugs.py`).
 
@@ -129,8 +143,10 @@ with VNC, then `systemctl --user restart obelisk-bot`.
 Every crash/outage alert carries a health picture (`obelisk/health.py`,
 also `venv/bin/python -m obelisk health` or the dashboard's "Check health
 now"): a banner saying NO REBOOT NEEDED / RESTART WAYDROID + BOT / REBOOT
-THE PI, five checks (Pi desktop, Waydroid, adb, Android screen, game), the
-Android screen and the Pi desktop. Latest in `logs/health.png`; alert copies
+THE PI, the checks (Pi desktop, Waydroid, adb, Android screen, game), the
+Android screen and the Pi desktop. A sixth check covers the bot itself: the
+periodic check alerts if its service is down or there has been no session for 2 h
+(unless paused), including after you stop it by hand. Latest in `logs/health.png`; alert copies
 in `logs/failures/*_health_*.png`. `obelisk-health.timer` runs the
 check every 50 min and alerts only if something is unhealthy (install:
 `systemctl --user link` both `systemd/obelisk-health.*` files, then

@@ -3,11 +3,12 @@
   venv/bin/python -m obelisk health        # also the dashboard's "Check health now"
 
 Checks, in order: Pi desktop (grim) -> Waydroid session -> adb -> Android
-screen (screencap) -> game in front. The picture has a coloured verdict
+screen (screencap) -> game in front -> the bot itself (service up, sessions
+still happening). The picture has a coloured verdict
 banner on top, the check list, the Android screen (or "NO PICTURE") and the
 Pi desktop. Saved as logs/health.png; crash alerts attach a copy.
 
-Only reads: screencap, `waydroid status`, `adb get-state`, dumpsys. Never
+Only reads: screencap, `waydroid status`, `adb get-state`, dumpsys, systemctl. Never
 presses anything, so it is safe to run while the bot is in a session.
 """
 
@@ -32,6 +33,7 @@ LOGS = Path(__file__).resolve().parent.parent / "logs"
 LATEST = LOGS / "health.png"
 
 OK, RESTART, REBOOT = "ok", "restart", "reboot"
+BOT_STALE = 2 * 3600    # no session for this long means the bot is hung (normally 50 min)
 VERDICTS = {   # level -> (banner colour BGR, headline, what to do)
     OK: ((60, 150, 40), "NO REBOOT NEEDED",
          "Pi and Android look healthy. The bot retries by itself."),
@@ -48,6 +50,8 @@ class Health:
     level: str = OK
     reason: str = ""
     stopped: bool = False          # the bot stopped itself (exit 3): it won't retry
+    bot_ok: bool = True            # service up and sessions happening
+    bot_service_down: bool = False
     android: "np.ndarray | None" = None
     desktop: "np.ndarray | None" = None
     when: dt.datetime = field(default_factory=dt.datetime.now)
@@ -64,7 +68,8 @@ class Health:
 
     def summary(self) -> str:
         bad = [f"{n}: {d}" for n, ok, d in self.checks if not ok]
-        return f"{self.headline} - {self.reason or 'all checks OK'}." + (
+        ok_text = "Pi and Android OK" if bad else "all checks OK"
+        return f"{self.headline} - {self.reason or ok_text}." + (
             f" Failed: {'; '.join(bad)}." if bad else "")
 
 
@@ -86,6 +91,25 @@ def waydroid_status() -> dict:
             k, v = line.split(":", 1)
             st[k.strip()] = v.strip()
     return st
+
+
+def bot_status(state=None, service=None, now: "float | None" = None) -> tuple[bool, str, bool]:
+    """(fine, detail, service down). Separate from the verdict: the Pi can be
+    perfectly healthy with the bot dead, and nothing else would say so."""
+    from .scheduler import pause_active
+    if state is None:
+        from .jobs import State
+        state = State()
+    now = time.time() if now is None else now
+    active = service() if service else _run("systemctl", "--user", "is-active", "obelisk-bot")[1]
+    if active in ("inactive", "failed"):
+        return False, f"service {active}", True
+    if pause_active(state.get("paused_until"), now):
+        return True, "paused from the dashboard", False
+    last = state.get("last_session_at")
+    if last is not None and now - last > BOT_STALE:
+        return False, f"no session for {int((now - last) // 60)} min", False
+    return True, "running", False
 
 
 def check(dev: "Device | None" = None, grab=grab_host_display, wd_status=waydroid_status,
@@ -127,6 +151,10 @@ def check(dev: "Device | None" = None, grab=grab_host_display, wd_status=waydroi
                 h.checks.append(("Game", False, str(e)[:60]))
     else:
         h.checks.append(("Android screen", False, "skipped: no adb"))
+
+    h.bot_ok, detail, h.bot_service_down = bot_status()
+    h.checks.append(("Bot", h.bot_ok, detail))
+    h.stopped = h.bot_service_down
 
     if h.desktop is None:
         h.level, h.reason = REBOOT, "the Pi's desktop is not responding"
@@ -197,18 +225,22 @@ def render(h: Health) -> np.ndarray:
 
 def alert_if_unhealthy(path: Path, h: Health, state=None) -> bool:
     """For the periodic check (obelisk-health.timer, every 50 min): catch a
-    frozen display etc. between sessions, before the bot trips over it. Quiet
-    while booting (bootcheck reports) and during an outage the bot is already
-    reporting; each verdict is sent at most once per 6 h."""
+    frozen display etc. between sessions, before the bot trips over it, and a
+    dead or hung bot. Quiet while booting (bootcheck reports) and during an outage
+    the bot is already reporting, unless its service is down. Each verdict is sent
+    at most once per 6 h; a send that fails is tried again at the next check."""
     from .bootcheck import uptime_s
     from .notify import alert
-    if h.level == OK or uptime_s() < 900:
+    if (h.level == OK and h.bot_ok) or uptime_s() < 900:
         return False
     if state is None:
         from .jobs import State
         state = State()
-    if state.get("outage"):
+    if state.get("outage") and not h.bot_service_down:
         return False
+    if h.level == OK:
+        return alert("health_bot", "Obelisk bot isn't running", h.summary(),
+                     priority="high", tags="warning", state=state, image=path)
     return alert(f"health_{h.level}", f"Obelisk: {h.headline.lower()}", h.summary(),
                  priority="high", tags="warning", state=state, image=path)
 
@@ -218,7 +250,7 @@ def run(dev: "Device | None" = None, copy_to_failures: bool = False,
     """Check, render, save logs/health.png (and a copy in logs/failures/).
     stopped=True: the bot has stopped itself, so "retries by itself" is wrong."""
     h = check(dev)
-    h.stopped = stopped
+    h.stopped = stopped or h.stopped
     img = render(h)
     LATEST.parent.mkdir(parents=True, exist_ok=True)
     tmp = LATEST.with_suffix(".tmp.png")

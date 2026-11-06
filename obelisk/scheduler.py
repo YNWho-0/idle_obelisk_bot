@@ -38,6 +38,10 @@ log = logging.getLogger("obelisk.scheduler")
 
 
 LATEST = Path(__file__).resolve().parent.parent / "logs" / "latest.jpg"
+# frames of sessions without a founder crate, to work out why some days get
+# 20-21 of the ~24 expected (2026-11-06)
+FOUNDER_EMPTY_DIR = LATEST.parent / "founder_empty"
+FOUNDER_EMPTY_KEEP = 100
 
 
 def save_latest(dev) -> None:
@@ -69,6 +73,8 @@ class Scheduler:
     LAUNCH_WAIT = 90           # seconds to wait for the mining screen after a relaunch
     MAX_FAILED_SESSIONS = 3
     KEEP_OPEN_SHOT_EVERY = 5 * 60   # seconds between dashboard pictures in keep-open mode
+    KEEP_OPEN_STUCK = 5 * 60        # seconds off the mining screen before restarting the game
+    KEEP_OPEN_MAX_RESTARTS = 3      # restarts in a row without reaching mining, then give up
 
     def __init__(self, dev, jobs, interrupts=(), poll: float = 2.0,
                  max_unknown: int = 15, max_failures: int = 3, planner=None, cloud=None):
@@ -91,6 +97,10 @@ class Scheduler:
         self.pause_logged = False
         self.kept_until = None          # this session is being held open until then
         self.last_shot = float("-inf")
+        self.off_mining_since = None    # keep-open: when the mining screen was last lost
+        self.stuck_restarts = 0
+        self.last_gems = None           # last good gem reading this session
+        self.founder_claimed = False
 
     def run_forever(self) -> None:
         while True:
@@ -147,6 +157,7 @@ class Scheduler:
         elif self.kept_until:
             self.end_keep_open()
         elif self.session_complete(now):
+            self.note_no_founder()
             self.end_session()
 
     # ---- keep-open mode (the game stays in front, buffs tick) --------------
@@ -168,11 +179,42 @@ class Scheduler:
             self.kept_until = until
             log.info("keep-open: the game stays in front until %s",
                      time.strftime("%H:%M", time.localtime(until)))
-        if self.last_screen == screens.MINING and not self.session_failed:
-            report_up()                 # hours can pass before this session ends
+        if self.last_screen == screens.MINING:
+            self.off_mining_since, self.stuck_restarts = None, 0
+            if not self.session_failed:
+                report_up()             # hours can pass before this session ends
+        elif self.off_mining_since is None:
+            self.off_mining_since = now
+        elif now - self.off_mining_since >= self.KEEP_OPEN_STUCK:
+            self.recover_keep_open()
+            return
         if now - self.last_shot >= self.KEEP_OPEN_SHOT_EVERY:
             self.last_shot = now
+            State().set("last_session_at", now)
             save_latest(self.dev)
+
+    def recover_keep_open(self) -> None:
+        """Normal sessions recover from an unknown screen through their time limit
+        and the next restart; keep-open has neither, and buffs are ticking."""
+        self.off_mining_since = None
+        self.stuck_restarts += 1
+        shot = save_failure(self.last_frame, f"keep_open_stuck_{self.last_screen}")
+        if self.stuck_restarts > self.KEEP_OPEN_MAX_RESTARTS:
+            log.error("keep-open: still stuck after %d game restarts; ending it",
+                      self.KEEP_OPEN_MAX_RESTARTS)
+            State().set("keep_open_until", None)
+            alert("keep_open_stuck", "Obelisk bot: keep-open ended early",
+                  f"Stuck on screen '{self.last_screen}' through {self.KEEP_OPEN_MAX_RESTARTS} game "
+                  "restarts, so the game goes to the background to save buffs. "
+                  "Screenshot in logs/failures/.", priority="high", tags="warning", image=shot)
+            return
+        log.warning("keep-open: off the mining screen for %d min; restarting the game (%d/%d)",
+                    self.KEEP_OPEN_STUCK // 60, self.stuck_restarts, self.KEEP_OPEN_MAX_RESTARTS)
+        self.dev.restart_game()
+        self.wait_for_game()
+        self.last_foreground_check = time.monotonic()
+        self.settle()
+        self.last_gems = None
 
     def end_keep_open(self) -> None:
         """No upload yet: the cloud info on screen is as old as this session, and
@@ -180,12 +222,16 @@ class Scheduler:
         restarts it, reads the cloud afresh and uploads if that is safe."""
         self.kept_until = None
         log.info("keep-open: over; game to background, then a normal session")
+        self.note_no_founder()
         self.end_session(upload=False, next_soon=True)
 
     def begin_session(self) -> None:
         self.planner.start()
         self.session_t0 = time.monotonic()
         self.failures, self.session_failed = 0, False
+        self.last_gems, self.founder_claimed = None, False   # a phone's spending isn't a loss
+        self.off_mining_since, self.stuck_restarts = None, 0
+        State().set("last_session_at", self.planner.started)
         log.info("session start")
         for job in self.jobs:                 # banked while offline: look right away
             if job.name == "freebie":
@@ -284,10 +330,22 @@ class Scheduler:
             message = f"{h.summary()} {message}"
         except Exception as he:                 # never let this block the alert
             log.warning("health picture failed: %s", he)
+        self.send_game_away()
         alert(key, title, f"{message} Failure screenshots: dashboard / logs/failures/. "
               "Restart: dashboard -> Restart bot.", priority="urgent", tags=tags, force=True,
               image=image)
         raise SystemExit(EXIT_TOO_MANY_FAILURES)
+
+    def send_game_away(self) -> None:
+        """Before stopping for good: a game left in front would burn buffs until
+        someone notices. HOME is a key event, never a press in the game."""
+        if self.planner is None:        # --always-open: staying in front is the point
+            return
+        State().set("keep_open_until", None)
+        try:
+            self.dev.go_home()
+        except Exception as e:          # never let this block the alert
+            log.warning("could not send the game to the background: %s", e)
 
     def handle_interrupts(self, frame) -> bool:
         """True if an interrupt handled this frame. An interrupt that can't
@@ -303,12 +361,31 @@ class Scheduler:
                 return True
         return False
 
+    def note_no_founder(self) -> None:
+        """Keep the last frame of a session that claimed no founder crate, so a
+        crate the bot failed to recognise can be seen afterwards."""
+        if self.founder_claimed or self.last_frame is None \
+                or not any(j.name == "founder" for j in self.jobs):
+            return
+        try:
+            FOUNDER_EMPTY_DIR.mkdir(parents=True, exist_ok=True)
+            path = FOUNDER_EMPTY_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}.jpg"
+            cv2.imwrite(str(path), self.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            for old in sorted(FOUNDER_EMPTY_DIR.glob("*.jpg"))[:-FOUNDER_EMPTY_KEEP]:
+                old.unlink()
+            log.info("founder: no crate this session (%s)", path.name)
+        except OSError as e:
+            log.debug("could not save the no-crate frame: %s", e)
+
     def end_session(self, upload: bool = True, next_soon: bool = False) -> None:
+        if self.last_screen == screens.MINING and self.last_gems is not None:
+            self.check_gem_gap(stable_gems(self.dev), "outside any job this session")
         if upload and self.cloud is not None and self.last_screen == screens.MINING:
             self.cloud_step("upload")
         save_latest(self.dev)
         self.dev.go_home()
         length = self.planner.finish()
+        State().set("last_session_at", self.planner.clock())
         if next_soon:
             self.planner.next_start = self.planner.earliest
         log.info("session end: %d s online; next session %s", length,
@@ -358,8 +435,12 @@ class Scheduler:
 
     def run_job(self, job) -> None:
         before = stable_gems(self.dev)
+        self.check_gem_gap(before, f"before job '{job.name}'")
         try:
-            log.info("job %s -> %s", job.name, job.run(self.dev))
+            result = job.run(self.dev)
+            log.info("job %s -> %s", job.name, result)
+            if job.name == "founder" and result == "claimed":
+                self.founder_claimed = True
             self.failures = 0
         except JobAborted as e:
             self.job_failed(job.name, e)
@@ -367,17 +448,33 @@ class Scheduler:
             self.check_gems(job, before)
 
     def check_gems(self, job, before) -> None:
-        """Gem guard: no bot job may ever leave us with fewer gems."""
+        """Gem guard: no bot job may ever leave us with fewer gems. An unreadable
+        'before' falls back on the last good reading."""
         after = stable_gems(self.dev)
+        if before is None:
+            before = self.last_gems
         if before is None or after is None:
             log.info("gem guard: couldn't read gems (%s -> %s); not checked", before, after)
             return
         if after < before:
-            save_failure(self.dev.capture(), f"GEM_GUARD_{job.name}_{before}_to_{after}")
-            self.stop("gem_guard", "Obelisk bot STOPPED: gems dropped",
-                      f"GEM GUARD: gems went {before} -> {after} during job '{job.name}'. "
-                      "Check the game before restarting.", tags="rotating_light,gem")
+            self.gem_stop(f"during job '{job.name}'", before, after)
+        self.last_gems = after
         log.info("gem guard: %d -> %d ok", before, after)
+
+    def check_gem_gap(self, gems, where: str) -> None:
+        """The same rule for what happens between jobs: popups and cloud steps press
+        buttons too. No drop in 213 such gaps in the logs up to 2026-11-06."""
+        if gems is None:
+            return
+        if self.last_gems is not None and gems < self.last_gems:
+            self.gem_stop(where, self.last_gems, gems)
+        self.last_gems = gems
+
+    def gem_stop(self, where: str, before: int, after: int) -> None:
+        save_failure(self.dev.capture(), f"GEM_GUARD_{where}_{before}_to_{after}")
+        self.stop("gem_guard", "Obelisk bot STOPPED: gems dropped",
+                  f"GEM GUARD: gems went {before} -> {after} {where}. "
+                  "Check the game before restarting.", tags="rotating_light,gem")
 
     def wait_for_game(self) -> bool:
         if wait_for(self.dev, lambda f: screens.identify(f) in GAME_READY,

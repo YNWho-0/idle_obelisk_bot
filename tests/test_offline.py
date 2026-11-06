@@ -37,8 +37,10 @@ from obelisk.session import SessionPlanner        # noqa: E402
 _TMP = Path(tempfile.mkdtemp(prefix="obelisk-tests-"))
 import obelisk.scheduler as _sched                 # noqa: E402
 _sched.LATEST = _TMP / "latest.jpg"
+_sched.FOUNDER_EMPTY_DIR = _TMP / "founder_empty"
 _jobs.FAIL_DIR = _TMP / "failures"
 _gems.UNREAD_DIR = _TMP / "gem_unread"
+_gems.STABLE_WAIT = 0.05                           # unreadable frames don't wait the real 6 s
 _pt.UNREAD_DIR = _TMP / "playtime_unread"
 _jobs.State.PATH = _TMP / "state.json"
 import obelisk.notify as _notify                  # noqa: E402
@@ -46,6 +48,8 @@ _notify.CONF = _TMP / "no-notify.conf"            # tests must never send real a
 import obelisk.health as _health                  # noqa: E402
 _health.LOGS, _health.LATEST = _TMP, _TMP / "health.png"
 # Scheduler.stop() attaches a health picture; never run the real (adb/grim) checks
+# nor look at the real bot service
+_real_bot_status, _health.bot_status = _health.bot_status, lambda: (True, "running", False)
 _health.run = lambda dev=None, copy_to_failures=False, stopped=False: (None, _health.Health(stopped=stopped))
 
 S = ROOT / "screens"
@@ -97,6 +101,7 @@ FRAMES = {k: load(v) for k, v in F.items()}
 _nb = FRAMES["store_closed"].copy()
 _nb[585:705, 235:335] = np.median(_nb[760:860, 600:700].reshape(-1, 3), axis=0).astype(np.uint8)
 FRAMES["no_bugs"] = _nb
+FRAMES["blank"] = np.zeros_like(_nb)                # gem counter unreadable
 
 CLAIM = (550, 665, 644, 726)
 GEM_150 = (550, 805, 644, 868)
@@ -769,6 +774,239 @@ def test_keep_open_comes_back_after_a_bot_restart():
     fresh.session_step(); fresh.session_step()
     assert fresh.kept_until and fresh.planner.started is not None
     st.set("keep_open_until", None)
+
+
+def test_keep_open_restarts_a_stuck_game_then_gives_up_to_save_buffs():
+    clock = [6_500_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock)
+    sched.LAUNCH_WAIT = sched.SETTLE_TIMEOUT = 0
+    st.set("keep_open_until", clock[0] + 12 * 3600)
+    sched.session_step(); sched.session_step()
+    assert dev.launches == 1 and sched.last_screen == screens.MINING
+    dev.queue = ["options"]                                    # a screen the bot doesn't know
+    sched.session_step()
+    clock[0] += 4 * 60
+    sched.session_step()
+    assert dev.launches == 1                                   # not yet
+    clock[0] += 60
+    sched.session_step()
+    assert dev.launches == 2 and dev.homes == 0                # recovered, mode still on
+    sched.session_step()
+    assert sched.off_mining_since is None and sched.stuck_restarts == 0   # mining again
+    dev.after_launch = ("options",)                            # now restarts don't help
+    dev.queue = ["options"]
+    for _ in range(sched.KEEP_OPEN_MAX_RESTARTS + 1):
+        sched.session_step()                                   # lost mining
+        clock[0] += 5 * 60
+        sched.session_step()                                   # restart, or give up
+    assert dev.launches == 2 + sched.KEEP_OPEN_MAX_RESTARTS
+    assert _jobs.State().get("keep_open_until") is None
+    sched.session_step()
+    assert dev.homes == 1 and sched.kept_until is None         # game away, buffs saved
+
+
+def test_stopping_sends_the_game_away_except_in_always_open():
+    e = JobAborted("x", FRAMES["options"])
+    clock = [6_600_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock)
+    st.set("keep_open_until", clock[0] + 3600)
+    dev.in_front = True
+    sched.job_failed("a", e); sched.job_failed("b", e)
+    try:
+        sched.job_failed("c", e)
+        raise AssertionError("did not stop")
+    except SystemExit as ex:
+        assert ex.code == 3
+    assert dev.homes == 1 and _jobs.State().get("keep_open_until") is None
+    class Broken(FakeDevice):                                  # HOME failing must not block the alert
+        def go_home(self):
+            raise OSError("adb gone")
+    sched = Scheduler(Broken("no_bugs", {}), [], poll=0, planner=SessionPlanner())
+    try:
+        sched.stop("k", "t", "m")
+    except SystemExit as ex:
+        assert ex.code == 3
+    dev = FakeDevice("no_bugs", {})
+    try:
+        Scheduler(dev, [], poll=0).stop("k", "t", "m")        # planner None = --always-open
+    except SystemExit:
+        pass
+    assert dev.homes == 0
+
+
+def test_restart_game_saves_first_if_the_game_is_in_front():
+    import obelisk.device as d
+    def run(front):
+        calls = []
+        dev = d.Device()
+        def adb(*a, **k):
+            calls.append(" ".join(a))
+            return f"topResumedActivity=x {d.PACKAGE if front else 'launcher'}/.A".encode()
+        dev._adb = adb
+        orig, d.time.sleep = d.time.sleep, lambda s: calls.append(f"sleep {s}")
+        try:
+            dev.restart_game()
+        finally:
+            d.time.sleep = orig
+        return [c for c in calls if "dumpsys" not in c]
+    front = run(True)
+    assert "HOME" in front[0] and front[1] == f"sleep {d.SAVE_WAIT}" and "force-stop" in front[2]
+    assert "force-stop" in run(False)[0]
+
+
+def test_founder_empty_session_keeps_a_frame():
+    import shutil
+    shutil.rmtree(_sched.FOUNDER_EMPTY_DIR, ignore_errors=True)
+    clock = [6_700_000.0]
+    st = _jobs.State(); st.set("keep_open_until", None); st.set("paused_until", None)
+    founder = FounderJob(state=_jobs.State(_TMP / "fe.json"), clock=lambda: clock[0])
+    dev = FakeDevice("no_bugs", {}, in_front=False, after_launch=("no_bugs",))
+    sched = Scheduler(dev, [founder], poll=0, planner=SessionPlanner(clock=lambda: clock[0]))
+    sched.session_step(); sched.session_step()
+    assert dev.homes == 1 and len(list(_sched.FOUNDER_EMPTY_DIR.glob("*.jpg"))) == 1
+    assert _jobs.State().get("last_session_at") == clock[0]    # heartbeat for the health check
+    keep, _sched.FOUNDER_EMPTY_KEEP = _sched.FOUNDER_EMPTY_KEEP, 2
+    try:
+        for n in ("20200101-000000", "20200101-000001", "20200101-000002"):
+            (_sched.FOUNDER_EMPTY_DIR / f"{n}.jpg").write_bytes(b"x")
+        sched.founder_claimed = True
+        sched.note_no_founder()                                # a claim: nothing saved
+        assert len(list(_sched.FOUNDER_EMPTY_DIR.glob("*.jpg"))) == 4
+        sched.founder_claimed = False
+        sched.note_no_founder()
+        names = sorted(p.name for p in _sched.FOUNDER_EMPTY_DIR.glob("*.jpg"))
+        assert len(names) == 2 and names[0] == "20200101-000002.jpg"   # oldest pruned
+    finally:
+        _sched.FOUNDER_EMPTY_KEEP = keep
+
+
+def test_gems_wait_out_an_overlay_and_give_up_cleanly():
+    wait, _gems.STABLE_WAIT = _gems.STABLE_WAIT, 30.0
+    try:
+        dev = FakeDevice("blank", {})
+        dev.queue = ["blank", "blank", "crate_gone", "crate_gone"]
+        assert _gems.stable_gems(dev) == 658
+        dev.queue = ["mining_bugs", "crate_gone", "crate_gone"]    # must agree twice
+        assert _gems.stable_gems(dev) == 658
+    finally:
+        _gems.STABLE_WAIT = wait
+    assert _gems.stable_gems(FakeDevice("blank", {})) is None
+
+
+def test_gem_guard_uses_the_last_reading_when_it_cannot_read():
+    class SpendJob:
+        name = "spend"
+        def run(self, dev):
+            dev.queue = ["mining_bugs"]                       # 632 gems
+            return "done"
+    dev = FakeDevice("blank", {})
+    s = Scheduler(dev, [], poll=0)
+    s.last_gems = 658
+    try:
+        s.run_job(SpendJob())
+        raise AssertionError("gem guard did not trip")
+    except SystemExit as e:
+        assert e.code == 3
+
+
+def test_gem_guard_covers_what_happens_between_jobs():
+    class Never:
+        name = "never"
+        def run(self, dev):
+            raise AssertionError("job ran after a gem drop")
+    s = Scheduler(FakeDevice("crate_gone", {}), [], poll=0)    # 658 gems
+    s.last_gems = 700
+    try:
+        s.run_job(Never())
+        raise AssertionError("gem guard did not trip")
+    except SystemExit as e:
+        assert e.code == 3
+    clock = [6_800_000.0]                                      # a new session: new baseline
+    st = _jobs.State(); st.set("keep_open_until", None); st.set("paused_until", None)
+    dev = FakeDevice("no_bugs", {}, in_front=False, after_launch=("no_bugs",))
+    s = Scheduler(dev, [], poll=0, planner=SessionPlanner(clock=lambda: clock[0]))
+    s.last_gems = 999_999                                      # spent on the phone since
+    s.session_step()
+    s.session_step()
+    assert dev.homes == 1                                      # finished, no false stop
+
+
+def test_open_conflict_alerts_again_through_the_6_hour_limit():
+    import obelisk.notify as nt
+    sent = []
+    orig = nt.alert
+    nt.alert = lambda key, *a, force=False, **k: sent.append((key, force)) or True
+    try:
+        st = _jobs.State(_TMP / "remind.json")
+        st.set("cloud_last_upload", 490845)
+        assert CloudSync(st).check(_cloud_visit("cloud_uploaded")) == "conflict"
+        assert CloudSync(st).check(_cloud_visit("cloud_uploaded")) == "conflict"
+    finally:
+        nt.alert = orig
+    # first alert always goes out; repeats are limited by the shared key
+    assert sent == [("cloud_conflict", True), ("cloud_conflict", False)]
+
+
+def test_dashboard_keep_pi_button():
+    import obelisk.dashboard as D
+    D.CONF = _TMP / "dash.conf"
+    logs, D.LOGS = D.LOGS, _TMP
+    try:
+        app = D.create_app(); tok = D.ensure_conf()["token"]
+        c = app.test_client()
+        assert c.post("/control", data={"a": "keep_pi"}).status_code == 403
+        c.get("/?t=" + tok)
+        st = _jobs.State()
+        st.set("cloud_conflict", None); st.set("cloud_last_upload", 5); st.set("session_now", None)
+        assert 'value="keep_pi"' not in c.get("/").get_data(as_text=True)
+        assert c.post("/control", data={"a": "keep_pi"}).status_code == 303
+        assert st.get("cloud_last_upload") == 5 and not st.get("session_now")   # no conflict: no-op
+        st.set("cloud_version_block", "versions differ"); st.set("cloud_conflict", "versions differ")
+        page = c.get("/").get_data(as_text=True)
+        assert 'value="keep_pi"' not in page and "Update the game" in page
+        assert c.post("/control", data={"a": "keep_pi"}).status_code == 303
+        assert st.get("cloud_conflict") and st.get("cloud_last_upload") == 5    # refused
+        st.set("cloud_version_block", None); st.set("cloud_conflict", "phone uploaded")
+        assert 'value="keep_pi"' in c.get("/").get_data(as_text=True)
+        assert c.post("/control", data={"a": "keep_pi"}).status_code == 303
+        assert st.get("cloud_conflict") is None and st.get("cloud_last_upload") is None
+        assert st.get("session_now") is True
+        st.set("session_now", None)
+    finally:
+        D.LOGS = logs
+
+
+def test_bot_status_and_its_alert():
+    import obelisk.bootcheck as bc
+    import obelisk.notify as nt
+    st = _jobs.State(_TMP / "bot_state.json")
+    now = 7_000_000.0
+    up, down = (lambda: "active"), (lambda: "inactive")
+    assert _real_bot_status(st, up, now) == (True, "running", False)   # no session yet: can't judge
+    st.set("last_session_at", now - 3600)
+    assert _real_bot_status(st, up, now)[0]
+    assert _real_bot_status(st, down, now) == (False, "service inactive", True)
+    st.set("last_session_at", now - 3 * 3600)
+    assert _real_bot_status(st, up, now) == (False, "no session for 180 min", False)
+    st.set("paused_until", "forever")
+    assert _real_bot_status(st, up, now)[0]                            # paused on purpose
+    assert not _real_bot_status(st, down, now)[0]                      # but a dead service still counts
+    st.set("paused_until", None)
+    sent = []
+    orig_alert, orig_up = nt.alert, bc.uptime_s
+    nt.alert = lambda key, *a, **k: sent.append(key) or True
+    bc.uptime_s = lambda: 3600
+    try:
+        assert _health.alert_if_unhealthy(None, _health.Health(bot_ok=False), st)
+        st.set("outage", {"since": 1})                                 # the bot is reporting it
+        assert not _health.alert_if_unhealthy(None, _health.Health(bot_ok=False), st)
+        assert _health.alert_if_unhealthy(None, _health.Health(bot_ok=False, bot_service_down=True), st)
+        st.set("outage", None)
+    finally:
+        nt.alert, bc.uptime_s = orig_alert, orig_up
+    assert sent == ["health_bot", "health_bot"]
+    h = _health.Health(checks=[("Bot", False, "service inactive")], bot_ok=False)
+    assert "Pi and Android OK" in h.summary() and "Bot: service inactive" in h.summary()
 
 
 def test_dashboard_keep_open_controls():

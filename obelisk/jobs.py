@@ -318,6 +318,20 @@ class OfflineGainsInterrupt:
         return False
 
 
+def keep_pi_save(state: State) -> "str | None":
+    """Resolve a conflict in this device's favour: the next session's upload
+    overwrites the cloud save. Returns the reason if it must not be done: during
+    a version block clearing the conflict would only remove the check, and the Pi
+    could overwrite the newer save later."""
+    blocked = state.get("cloud_version_block")
+    if blocked:
+        return blocked
+    state.set("cloud_conflict", None)
+    state.set("cloud_last_upload", None)
+    state.set("cloud_upload_unverified", None)
+    return None
+
+
 class CloudSync:
     """Cloud save sync, policy "B": never overwrite progress from another device.
 
@@ -370,12 +384,21 @@ class CloudSync:
                   f"{why}. The bot is paused (no playing/uploading) until you decide: "
                   "keep the Pi's save with 'python -m obelisk cloud --keep-pi', or "
                   "play longer on the phone and upload, then ask for a download.",
-                  priority="high", tags="warning,cloud", state=self.state, image=shot)
+                  priority="high", tags="warning,cloud", state=self.state, image=shot, force=True)
         self.state.set("cloud_conflict", why)
         log.warning("cloud: CONFLICT (%s). Not playing or uploading until resolved: "
                     "python -m obelisk cloud --keep-pi  (or make the other device's save "
                     "longer and download it)", why)
         return "conflict"
+
+    def _remind(self, key: str, why: str) -> None:
+        """Same key as the first alert, so at most one per 6 h. One alert wasn't
+        enough: a conflict on 2026-11-03 held the bot up for 13 h."""
+        from .notify import alert
+        alert(key, "Obelisk bot: still held up by the cloud save",
+              f"{why}. Sessions are being skipped, so nothing is being claimed. "
+              "See the Cloud row on the dashboard.", priority="high", tags="warning,cloud",
+              state=self.state)
 
     def _version_block(self, frame) -> "str | None":
         """Why the game refuses a cloud save with more play time, or None.
@@ -407,7 +430,9 @@ class CloudSync:
                   "nothing was overwritten. Update whichever device has the older "
                   "version (Pi: Play Store); the next session then loads the cloud "
                   "save by itself. Don't use --keep-pi.",
-                  priority="high", tags="warning,cloud", state=self.state, image=shot)
+                  priority="high", tags="warning,cloud", state=self.state, image=shot, force=True)
+        else:
+            self._remind("cloud_version_block", why)
         self.state.set("cloud_version_block", why)
         self.state.set("cloud_conflict", why)
         log.warning("cloud: VERSION BLOCK (%s). Not playing or uploading until the game "
@@ -467,6 +492,7 @@ class CloudSync:
             return self._download(dev, frame, cloud_t)
         if self.state.get("cloud_conflict"):
             log.warning("cloud: conflict still unresolved (%s)", self.state.get("cloud_conflict"))
+            self._remind("cloud_conflict", self.state.get("cloud_conflict"))
             return "conflict"
         cloud_t = read_seconds(frame, CLOUD_ROW)
         if cloud_t is None:

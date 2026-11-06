@@ -4,8 +4,8 @@
 
 It reads the bot's files (logs/, state.json, daily reports, screenshots) and
 `systemctl --user is-active`; it never talks to the device or the game. Its
-only writes: pause/resume/session-now/keep-open flags in state.json, and the
-Restart buttons (bot service / Waydroid session + bot via scripts/restart_all.sh /
+only writes: pause/resume/session-now/keep-open/keep-Pi flags in state.json, and
+the Restart buttons (bot service / Waydroid session + bot via scripts/restart_all.sh /
 reboot the Pi).
 
 Access needs the secret token from dashboard.conf (gitignored): open
@@ -196,6 +196,7 @@ def collect() -> dict:
         "gems": gems[-300:],
         "gem_now": gems[-1][1] if gems else None,
         "cloud_conflict": st.get("cloud_conflict"),
+        "cloud_version_block": st.get("cloud_version_block"),
         "cloud_last": fmt_playtime(st.get("cloud_last_upload")),
         "events": events,
         "failures": [p.name for p in failures],
@@ -298,7 +299,12 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
     <button name="a" value="now" {{ 'disabled' if d.paused_until or d.session_now or d.in_session or d.keep_open }}>{{ 'Session requested…' if d.session_now else 'Run a session now' }}</button>
    </form>
    <span class="sub">Pause before playing on the Pi; a running session finishes first.</span></span>
-  <span>Cloud</span><span>{% if d.cloud_conflict %}<b style="color:var(--warn)">conflict:</b> {{ d.cloud_conflict }}{% else %}in sync · last upload {{ d.cloud_last }}{% endif %}</span>
+  <span>Cloud</span><span>{% if d.cloud_conflict %}<b style="color:var(--warn)">conflict:</b> {{ d.cloud_conflict }}
+   {% if d.cloud_version_block %}<span class="sub" style="display:block">Update the game on the older device; the next session then loads the cloud save.</span>
+   {% else %}<form method="post" action="control" class="ctl" style="margin-top:6px"><button name="a" value="keep_pi"
+    onclick="return confirm('Keep the save on the Pi? The next session overwrites the cloud save, including anything your phone uploaded.')">Keep the Pi save</button></form>
+   <span class="sub">Overwrites the cloud save. To keep the phone save instead, play longer on the phone and upload.</span>{% endif %}
+   {% else %}in sync · last upload {{ d.cloud_last }}{% endif %}</span>
  </div>
 </div>
 
@@ -433,7 +439,7 @@ def create_app() -> Flask:
 
     @app.post("/control")
     def control():
-        from .jobs import State
+        from .jobs import State, keep_pi_save
         st = State()
         a = request.form.get("a")
         now = dt.datetime.now().timestamp()
@@ -457,6 +463,9 @@ def create_app() -> Flask:
                 st.set("keep_open_until", now + minutes * 60)
         elif a == "keep_stop":
             st.set("keep_open_until", None)
+        elif a == "keep_pi":
+            if st.get("cloud_conflict") and keep_pi_save(st) is None:
+                st.set("session_now", True)
         else:
             abort(400)
         return redirect("./", code=303)

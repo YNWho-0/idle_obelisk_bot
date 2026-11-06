@@ -8,6 +8,7 @@ otherwise the value is None ("don't know") and the guard skips that check.
 from __future__ import annotations
 
 import logging
+import time
 from functools import lru_cache
 from typing import Optional
 
@@ -18,6 +19,7 @@ from .vision import ANCHOR_DIR
 
 UNREAD_DIR = ANCHOR_DIR.parent.parent / "logs" / "gem_unread"
 MAX_UNREAD_FILES = 50
+STABLE_WAIT = 6.0     # s; game toasts dim the counter or pass next to it for a few seconds
 
 log = logging.getLogger("obelisk.gems")
 
@@ -100,14 +102,18 @@ def read_gems(frame: np.ndarray) -> Optional[int]:
     return int("".join(digits))
 
 
-def stable_gems(dev, tries: int = 2) -> Optional[int]:
-    """Gem count only if consecutive captures agree."""
-    vals = []
-    for i in range(tries):
-        if i:
-            dev.sleep(0.3)
-        vals.append(read_gems(dev.capture()))
-    return vals[0] if vals[0] is not None and all(v == vals[0] for v in vals) else None
+def stable_gems(dev) -> Optional[int]:
+    """Gem count once two captures in a row agree, or None after STABLE_WAIT."""
+    deadline = time.monotonic() + STABLE_WAIT
+    last = None
+    while True:
+        value = read_gems(dev.capture())
+        if value is not None and value == last:
+            return value
+        last = value
+        if time.monotonic() >= deadline:
+            return None
+        dev.sleep(0.5)
 
 
 def _save_unread(frame: np.ndarray) -> None:

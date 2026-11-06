@@ -22,6 +22,7 @@ from . import ACTIVITY, ADB_SERIAL, HEIGHT, PACKAGE, WIDTH
 log = logging.getLogger("obelisk.device")
 
 PRESS_MS = 150
+SAVE_WAIT = 30      # seconds between HOME (the game saves then) and a force-stop
 
 
 class DeviceError(RuntimeError):
@@ -126,11 +127,15 @@ class Device:
         self._adb("shell", "input", "keyevent", "KEYCODE_HOME")
 
     def restart_game(self) -> None:
-        """Fresh start (the game only fetches cloud-save info at startup). Safe:
-        tested 2026-11-01, the game saves locally when sent to the background."""
+        """Fresh start (the game only fetches cloud-save info at startup). The game
+        saves locally when sent to the background (tested 2026-11-01), so if it is
+        in front, e.g. after a bot restart, it goes there first."""
         if self.dry_run:
             log.info("DRY RUN restart %s", PACKAGE)
             return
+        if self.game_in_front():
+            self.go_home()
+            time.sleep(SAVE_WAIT)
         log.info("restarting %s", PACKAGE)
         self._adb("shell", "am", "force-stop", PACKAGE)
         time.sleep(2)

@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import time
 
+from .device import SAVE_WAIT
+
 
 class SessionPlanner:
     EVERY = 50 * 60       # seconds between session starts (< the 60 min drop cycle)
     MAX_SESSION = 5 * 60
-    SAVE_WAIT = 30        # seconds after HOME before a force-stop: the game saves on HOME
+    SAVE_WAIT = SAVE_WAIT # seconds after HOME before a force-stop: the game saves on HOME
 
     def __init__(self, clock=time.time):
         self.clock = clock
