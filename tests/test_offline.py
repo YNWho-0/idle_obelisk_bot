@@ -783,12 +783,14 @@ def test_dashboard_keep_open_controls():
         st = _jobs.State(); st.set("keep_open_until", None); st.set("paused_until", None)
         st.set("cloud_conflict", None)
         page = c.get("/").get_data(as_text=True)
-        assert 'name="minutes"' in page and "Keep open for" in page and "Stop now" not in page
+        assert 'name="minutes"' in page and "Keep open for" in page
+        assert 'value="keep_stop" disabled' in page           # always shown, usable only when on
         before = dt.datetime.now().timestamp()
         assert c.post("/control", data={"a": "keep_open", "minutes": 90}).status_code == 303
         assert before + 5400 <= _jobs.State().get("keep_open_until") <= before + 5410
         page = c.get("/").get_data(as_text=True)
-        assert "Stop now" in page and "game kept open until" in page and "1 h 30 min left" in page
+        assert 'value="keep_stop" disabled' not in page
+        assert "game kept open until" in page and "1 h 30 min left" in page
         for bad in ("", "abc", "5", "9999"):                  # slider range only
             assert c.post("/control", data={"a": "keep_open", "minutes": bad}).status_code == 400
         assert c.post("/control", data={"a": "keep_stop"}).status_code == 303
@@ -804,7 +806,7 @@ def test_dashboard_keep_open_controls():
         assert _jobs.State().get("keep_open_until") is None   # refused during a conflict
         st.set("cloud_conflict", None)
         st.set("keep_open_until", dt.datetime.now().timestamp() - 5)     # ran out, bot not looked yet
-        assert "Stop now" not in c.get("/").get_data(as_text=True)
+        assert 'value="keep_stop" disabled' in c.get("/").get_data(as_text=True)
         st.set("keep_open_until", None)
         assert D.fmt_minutes(15) == "15 min" and D.fmt_minutes(60) == "1 h"
         assert D.fmt_minutes(135) == "2 h 15 min"

@@ -272,6 +272,7 @@ a{color:var(--accent)}
 .ctl button{font:inherit;font-size:14px;padding:7px 12px;border-radius:9px;border:1px solid var(--line);
 background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
 .ctl button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}
+.ctl button.stop:not(:disabled){border-color:var(--bad);color:var(--bad);font-weight:600}
 .slider{display:flex;justify-content:space-between;margin:10px 0 0}
 input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
 </style></head><body><main>
@@ -309,7 +310,7 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
   <input type="range" id="keep-minutes" name="minutes" min="{{ keep_min }}" max="{{ keep_max }}" step="{{ keep_step }}" value="{{ keep_default }}">
   <div class="ctl">
    <button class="primary" name="a" value="keep_open" {{ 'disabled' if d.paused_until or d.cloud_conflict }}>{{ 'Change to' if d.keep_open else 'Keep open for' }} <span class="keep-len">{{ keep_default_txt }}</span></button>
-   {% if d.keep_open %}<button name="a" value="keep_stop">Stop now</button>{% endif %}
+   <button class="stop" name="a" value="keep_stop" {{ 'disabled' if not d.keep_open }}>Stop now</button>
   </div>
  </form>
  <span class="sub">{% if d.paused_until %}Resume the bot first.{% elif d.cloud_conflict %}Unavailable during a cloud conflict.{% else %}The game stays on screen so buffs tick, and the bot keeps claiming. No cloud uploads until it ends; then normal sessions resume.{% endif %}</span>
