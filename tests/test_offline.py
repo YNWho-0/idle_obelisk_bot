@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
 import sys
 import tempfile
 import traceback
@@ -783,6 +784,38 @@ def test_pause_and_session_now_controls():
     assert _jobs.State().get("session_now") is None
     st = _jobs.State(); st.set("paused_until", clock[0] - 1)    # expired timed pause
     assert sched.control(clock[0]) is None and _jobs.State().get("paused_until") is None
+
+
+def test_set_options_rows_match_their_reference_screens():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("set_options", ROOT / "scripts" / "set_options.py")
+    so = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(so)
+    labels = [o[1] for o in so.OPTIONS]
+    assert len(labels) == len(set(labels))
+    for tab, label, src, y, original, bot in so.OPTIONS:
+        frame = cv2.imread(str(so.SCREENS / src))
+        assert so.find_label(frame, so.label_template(src, y)) == y, label
+        assert so.state_at(frame, y) is not None, label
+        assert original != bot, label
+    true_time = next(o for o in so.OPTIONS if o[1].startswith("Timers Show True Time"))
+    assert true_time[4:] == (False, True)                 # your original: off
+
+
+def test_dashboard_updates_itself():
+    import obelisk.dashboard as D
+    D.CONF = _TMP / "dash.conf"
+    logs, D.LOGS = D.LOGS, _TMP
+    try:
+        app = D.create_app(); tok = D.ensure_conf()["token"]
+        c = app.test_client(); c.get("/?t=" + tok)
+        page = c.get("/").get_data(as_text=True)
+        ids = re.findall(r'id="([\w-]+)" data-live', page)
+        assert len(ids) == len(set(ids)) == 10 and "card-keep" in ids and "updated" in ids
+        assert "window.dashRefresh" in page and page.count('http-equiv="refresh"') == 1
+        assert '<noscript><meta http-equiv="refresh"' in page  # only without JavaScript
+    finally:
+        D.LOGS = logs
 
 
 def test_dashboard_controls_need_token():

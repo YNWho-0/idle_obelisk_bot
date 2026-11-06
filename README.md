@@ -156,7 +156,8 @@ in `logs/failures/*_health_*.png`. `obelisk-health.timer` runs the
 check every 50 min and alerts only if something is unhealthy (install:
 `systemctl --user link` both `systemd/obelisk-health.*` files, then
 `systemctl --user enable --now obelisk-health.timer`).
-The dashboard's Restart card does the same from a phone: restart the bot,
+The dashboard updates itself every 5 s while it's open. Its Restart card does the
+same from a phone: restart the bot,
 restart Waydroid + game + bot (`scripts/restart_all.sh`, progress in
 `logs/restart.log`), or reboot the Pi.
 
@@ -171,10 +172,10 @@ venv/bin/python -I tests/test_offline.py     # offline tests, no device needed
 
 ## Game settings
 
-The bot setup changed 12 in-game Options (noise off, Lootbug gem confirmation
-back on) plus Cloud Auto-Save off. Originals are in `docs/game_settings.md`;
-`venv/bin/python -I scripts/set_options.py --check | --restore` (start with the
-Options screen open).
+The bot setup changed 13 in-game Options (noise off, Lootbug gem confirmation
+back on, timers showing true time) plus Cloud Auto-Save off. Originals are in
+`docs/game_settings.md`; `venv/bin/python -I scripts/set_options.py --check |
+--restore` (start with the Options screen open).
 
 ## Layout
 

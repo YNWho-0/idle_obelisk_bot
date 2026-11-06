@@ -4,8 +4,10 @@ Recorded 2026-11-01 from screenshots (`screens/32_*`, `screens/33_*`) before
 the bot setup changed anything. Path in game: grid menu (bottom bar, centre)
 -> Options -> tab.
 
-**Changed** = what the v2 bot setup changed on 2026-11-01. To restore your
-original setup, set every changed row back to its "Original" value.
+**Changed** = what the v2 bot setup changed on 2026-11-01, plus the true-time
+timers you asked for on 2026-11-06. To restore your original setup, set every
+changed row back to its "Original" value: `scripts/set_options.py --restore`
+does this for all of them except Cloud Auto-Save (see the end of this page).
 
 ## General
 | Setting | Original | Changed to |
@@ -39,7 +41,7 @@ original setup, set every changed row back to its "Original" value.
 | **Disable Bomb-Bag/Drone Pause tooltips** | off | **ON** |
 | **Hide Void Portal Resource Gain Popups** | off | **ON** |
 | **Hide Coal Full Popup** | off | **ON** |
-| Timers Show True Time After Game Speed | off | |
+| **Timers Show True Time After Game Speed** | off | **ON** (2026-11-06, your request: timers show real time) |
 | Show Miner At Top of UI | ON | |
 | Disable Floor Movement Buttons | off | |
 | Disable Opening Gifts | off | |

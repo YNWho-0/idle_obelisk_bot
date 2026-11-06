@@ -6,6 +6,7 @@ Start with the Options screen open (grid menu -> Options).
   venv/bin/python -I scripts/set_options.py            # apply bot settings
   venv/bin/python -I scripts/set_options.py --restore  # back to the originals
   venv/bin/python -I scripts/set_options.py --check    # report only, no presses
+  ... --only "Timers Show"                             # just the rows matching this text
 
 Layout v2 (the game's native 720x1280 layout since 2026-11-01). The v1
 version is in git history.
@@ -48,6 +49,7 @@ OPTIONS = [
     ("display", "Disable Bomb-Bag/Drone Pause tooltips", "n71_opt_display.png", 365, False, True),
     ("display", "Hide Void Portal Resource Gain Popups", "n71_opt_display.png", 418, False, True),
     ("display", "Hide Coal Full Popup", "n71_opt_display.png", 472, False, True),
+    ("display", "Timers Show True Time After Game Speed", "n71_opt_display.png", 605, False, True),
     ("display", "Make Pets Invisible", "n71_opt_display.png", 978, False, True),
     ("display", "Minimize Mining Effects To Stop Flashing", "n71_opt_display_2.png", 485, False, True),
     ("display", "Hide Golden Floor Effects", "n71_opt_display_2.png", 698, False, True),
@@ -101,11 +103,14 @@ def main() -> None:
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--restore", action="store_true")
     g.add_argument("--check", action="store_true")
+    ap.add_argument("--only", metavar="TEXT", default="", help="only rows whose label contains TEXT")
     args = ap.parse_args()
 
     dev = Device()
     SHOTS.mkdir(parents=True, exist_ok=True)
     for i, (tab, label, src, ref_y, original, bot) in enumerate(OPTIONS):
+        if args.only.lower() not in label.lower():
+            continue
         want = original if args.restore else bot
         dev.press(TABS[tab], TAB_Y)
         time.sleep(1.2)

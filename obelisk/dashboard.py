@@ -70,6 +70,8 @@ def log_lines(hours: float = 48):
     out = []
     for path in sorted(LOGS.glob("obelisk.log*")):
         try:
+            if path.stat().st_mtime < since.timestamp():    # the page asks every few seconds
+                continue
             text = path.read_text(errors="replace")
         except OSError:
             continue
@@ -241,7 +243,7 @@ def gem_svg(points, w=640, h=160) -> str:
 
 PAGE = """<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60"><title>Obelisk bot</title>
+<noscript><meta http-equiv="refresh" content="60"></noscript><title>Obelisk bot</title>
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--fg:#1b1b1b;--muted:#6b6b6b;--line:#e3e3df;--accent:#2f6fde;
 --ok:#1f8a4c;--warn:#b7791f;--bad:#c0392b}
@@ -279,9 +281,9 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
 input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
 </style></head><body><main>
 <h1>Idle Obelisk bot</h1>
-<div class="sub">updated {{ d.now.strftime('%a %H:%M:%S') }} · refreshes every minute</div>
+<div class="sub"><span id="updated" data-live>updated {{ d.now.strftime('%a %H:%M:%S') }}</span> · <span id="live">live</span></div>
 
-<div class="card">
+<div class="card" id="card-status" data-live>
  <h2>Status</h2>
  {% if d.service != 'active' %}<span class="badge bad">bot {{ d.service }}</span>
  {% elif d.paused_until %}<span class="badge warn">paused {{ 'until resumed' if d.paused_until == 'forever' else 'until ' + pause_until_txt }}</span>
@@ -309,7 +311,7 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
  </div>
 </div>
 
-<div class="card">
+<div class="card" id="card-keep" data-live>
  <h2>Keep game open</h2>
  {% if d.keep_open %}<span class="badge ok">on · {{ d.keep_open_left }} left</span>{% endif %}
  <form method="post" action="control">
@@ -323,10 +325,10 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
  <span class="sub">{% if d.paused_until %}Resume the bot first.{% elif d.cloud_conflict %}Unavailable during a cloud conflict.{% else %}The game stays on screen so buffs tick, and the bot keeps claiming. No cloud uploads until it ends; then normal sessions resume.{% endif %}</span>
 </div>
 
-<div class="card">
+<div class="card" id="card-health" data-live>
  <h2>Health &amp; restart</h2>
  <form method="post" action="restart" class="ctl">
-  <button name="a" value="health" {{ 'disabled' if d.health_running }}>{{ 'Checking… (refresh in ~30 s)' if d.health_running else 'Check health now' }}</button>
+  <button name="a" value="health" {{ 'disabled' if d.health_running }}>{{ 'Checking… (~30 s)' if d.health_running else 'Check health now' }}</button>
  </form>
  {% if d.health_mtime %}<a href="health.png"><img class="shot" src="health.png?v={{ d.health_mtime.timestamp()|int }}" alt="health check picture"></a>
  <div class="sub" style="text-align:center;margin:6px 0 10px">health check {{ d.health_mtime.strftime('%a %H:%M') }} · the banner says whether to reboot</div>{% endif %}
@@ -341,12 +343,12 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
  </form>
  <span class="sub">Try them in this order. "Waydroid + bot" also fixes a frozen game screen.</span>
  {% if d.restart_running or d.restart_log %}<div class="ev" style="margin-top:8px">
-  {% if d.restart_running %}<div class="WARNING">restart in progress… (page refreshes every minute)</div>{% endif %}
+  {% if d.restart_running %}<div class="WARNING">restart in progress…</div>{% endif %}
   {% for line in d.restart_log|reverse %}<div>{{ line }}</div>{% endfor %}
  </div>{% endif %}
 </div>
 
-<div class="card">
+<div class="card" id="card-today" data-live>
  <h2>Today</h2>
  <div class="tiles">
   <div class="tile"><b>{{ d.founder }}</b><span>founder crates</span></div>
@@ -359,41 +361,83 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
  <p style="margin:10px 0 0"><a href="report/today">Today's full report →</a></p>
 </div>
 
-<div class="card"><h2>Gems (48 h)</h2>{{ chart|safe if chart else 'not enough readings yet' }}</div>
+<div class="card" id="card-gems" data-live><h2>Gems (48 h)</h2>{{ chart|safe if chart else 'not enough readings yet' }}</div>
 
-<div class="card"><h2>Latest screen</h2>
+<div class="card" id="card-latest" data-live><h2>Latest screen</h2>
  {% if d.latest_mtime %}<a href="latest.jpg"><img class="shot" src="latest.jpg?v={{ d.latest_mtime.timestamp()|int }}" alt="last session screenshot"></a>
  <div class="sub" style="text-align:center;margin:6px 0 0">saved {{ d.latest_mtime.strftime('%a %H:%M') }}</div>
  {% else %}none yet (saved at the end of each session){% endif %}
 </div>
 
-<div class="card"><h2>Recent activity</h2><div class="ev">
+<div class="card" id="card-activity" data-live><h2>Recent activity</h2><div class="ev">
  {% for t, lvl, lg, msg in d.events|reverse %}<div class="{{ lvl }}">{{ t.strftime('%H:%M:%S') }} {{ msg }}</div>{% endfor %}
 </div></div>
 
-<div class="card"><h2>Daily reports</h2>
+<div class="card" id="card-reports" data-live><h2>Daily reports</h2>
  {% if d.reports %}<ul>{% for r in d.reports[:30] %}<li><a href="report/{{ r }}">{{ r }}</a></li>{% endfor %}</ul>
  {% else %}first one is written at 00:05{% endif %}
 </div>
 
-<div class="card"><h2>Failure screenshots</h2>
+<div class="card" id="card-failures" data-live><h2>Failure screenshots</h2>
  {% if d.failures %}<div class="gallery">{% for f in d.failures %}<a href="fail/{{ f }}"><img loading="lazy" src="fail/{{ f }}?w=200" alt="">{{ f[9:30] }}</a>{% endfor %}</div>
  {% else %}none{% endif %}
 </div>
 <script>
-// the page reloads every minute: remember the slider (this phone only)
+// Live updates: every few seconds fetch the page and replace the cards that changed.
 (function () {
-  var s = document.getElementById("keep-minutes"), KEY = "keepMinutes";
+  var EVERY = 5000, KEY = "keepMinutes", seen = {}, busy = false, loading = false, idle;
+  function slider() { return document.getElementById("keep-minutes"); }
   function show() {
-    var h = Math.floor(s.value / 60), m = s.value % 60, txt = (h ? h + " h" : "") + (h && m ? " " : "") + (m || !h ? m + " min" : "");
+    var s = slider(), h = Math.floor(s.value / 60), m = s.value % 60;
+    var txt = (h ? h + " h" : "") + (h && m ? " " : "") + (m || !h ? m + " min" : "");
     document.querySelectorAll(".keep-len").forEach(function (e) { e.textContent = txt; });
   }
-  try { var v = localStorage.getItem(KEY); if (v) s.value = v; } catch (e) {}
-  s.addEventListener("input", function () {
+  function restore() {   // the slider belongs to this phone, not to the server's page
+    try { var v = localStorage.getItem(KEY); if (v) slider().value = v; } catch (e) {}
     show();
-    try { localStorage.setItem(KEY, s.value); } catch (e) {}
+  }
+  function state(text) { document.getElementById("live").textContent = text; }
+  function apply(html) {
+    var fresh = new DOMParser().parseFromString(html, "text/html");
+    fresh.querySelectorAll("[data-live]").forEach(function (n) {
+      var old = document.getElementById(n.id);
+      if (old && seen[n.id] !== n.innerHTML) {
+        seen[n.id] = n.innerHTML;
+        old.innerHTML = n.innerHTML;
+        if (n.id === "card-keep") restore();
+      }
+    });
+  }
+  function refresh() {
+    if (loading || busy || document.visibilityState === "hidden") return Promise.resolve();
+    loading = true;
+    return fetch(location.href, {cache: "no-store", credentials: "same-origin"}).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.text();
+    }).then(function (html) {
+      if (!busy) apply(html);       // never swap a button out from under a finger
+      state("live");
+    }).catch(function () {
+      state("connection lost, retrying");
+    }).then(function () { loading = false; });
+  }
+  document.querySelectorAll("[data-live]").forEach(function (n) { seen[n.id] = n.innerHTML; });
+  restore();
+  document.addEventListener("input", function (e) {
+    if (e.target.id !== "keep-minutes") return;
+    show();
+    try { localStorage.setItem(KEY, e.target.value); } catch (err) {}
   });
-  show();
+  document.addEventListener("pointerdown", function () { busy = true; clearTimeout(idle); });
+  ["pointerup", "pointercancel"].forEach(function (t) {
+    document.addEventListener(t, function () {
+      clearTimeout(idle);
+      idle = setTimeout(function () { busy = false; }, 500);
+    });
+  });
+  document.addEventListener("visibilitychange", refresh);
+  setInterval(refresh, EVERY);
+  window.dashRefresh = refresh;
 })();
 </script>
 </main></body></html>"""
