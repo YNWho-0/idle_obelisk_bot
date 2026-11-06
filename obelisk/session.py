@@ -8,6 +8,9 @@ starts with a force-stop + launch (the game only fetches cloud-save info at
 startup; tested safe: it saves locally when sent to the background) and ends
 with HOME.
 
+The dashboard's keep-open mode holds one session open for a chosen time, so
+the buffs tick (see Scheduler.keep_open_until).
+
 The Founder crate drops on its own hourly cycle (the Store's Founder's Bundle
 countdown read 28:48 right after a claim, so claiming does not restart it) and
 then WAITS on the field until pressed. So sessions don't wait for it: one
@@ -23,10 +26,12 @@ import time
 class SessionPlanner:
     EVERY = 50 * 60       # seconds between session starts (< the 60 min drop cycle)
     MAX_SESSION = 5 * 60
+    SAVE_WAIT = 30        # seconds after HOME before a force-stop: the game saves on HOME
 
     def __init__(self, clock=time.time):
         self.clock = clock
         self.next_start = clock()         # first session right away
+        self.earliest = self.next_start   # no session before this, whatever asks for one
         self.started = None
 
     def start(self) -> None:
@@ -37,7 +42,9 @@ class SessionPlanner:
 
     def finish(self) -> float:
         """End the session; returns its length and schedules the next one."""
-        length = self.clock() - self.started
+        now = self.clock()
+        length = now - self.started
         self.next_start = self.started + self.EVERY
+        self.earliest = now + self.SAVE_WAIT
         self.started = None
         return length

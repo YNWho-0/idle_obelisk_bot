@@ -4,8 +4,8 @@
 
 It reads the bot's files (logs/, state.json, daily reports, screenshots) and
 `systemctl --user is-active`; it never talks to the device or the game. Its
-only writes: pause/resume/session-now flags in state.json, and the Restart
-buttons (bot service / Waydroid session + bot via scripts/restart_all.sh /
+only writes: pause/resume/session-now/keep-open flags in state.json, and the
+Restart buttons (bot service / Waydroid session + bot via scripts/restart_all.sh /
 reboot the Pi).
 
 Access needs the secret token from dashboard.conf (gitignored): open
@@ -36,6 +36,8 @@ RE_GEM = re.compile(r"^gem guard: (\d+) -> (\d+) ok$")
 RE_SESSION_END = re.compile(r"^session end: (\d+) s online; next session (\d\d:\d\d:\d\d)")
 SAFE_NAME = re.compile(r"^[\w.\-]+\.(png|jpg)$")
 SAFE_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
+# keep-open slider, minutes
+KEEP_MIN, KEEP_MAX, KEEP_STEP, KEEP_DEFAULT = 15, 12 * 60, 15, 60
 
 
 def conf() -> dict:
@@ -148,6 +150,11 @@ def fmt_playtime(sec) -> str:
     return f"{d:02d}d {h:02d}h {m:02d}m {s:02d}s"
 
 
+def fmt_minutes(minutes: int) -> str:
+    h, m = divmod(int(minutes), 60)
+    return " ".join(([f"{h} h"] if h else []) + ([f"{m} min"] if m or not h else []))
+
+
 def collect() -> dict:
     rows = log_lines(48)
     today = dt.date.today()
@@ -171,6 +178,8 @@ def collect() -> dict:
             key = f"{m.group(1)} {m.group(2)}"
             jobs_today[key] = jobs_today.get(key, 0) + 1
     in_session = last_start is not None and (last_end is None or last_start > last_end)
+    keep_until = st.get("keep_open_until")
+    keep_left = (keep_until - dt.datetime.now().timestamp()) / 60 if keep_until else 0
     events = [r for r in rows if "device: press" not in r[2] + r[3]
               and not r[3].startswith(("gem guard", "interrupt: offline"))][-40:]
     failures = sorted((p for p in (LOGS / "failures").glob("*.png")), reverse=True)[:12]
@@ -193,6 +202,10 @@ def collect() -> dict:
         "reports": reports,
         "paused_until": st.get("paused_until"),
         "session_now": st.get("session_now"),
+        "keep_open": keep_left > 0,
+        "keep_open_until": dt.datetime.fromtimestamp(keep_until) if keep_left > 0 else None,
+        # rounded up: the last minute reads "1 min", never "0 min"
+        "keep_open_left": fmt_minutes(int(keep_left) + 1) if keep_left > 0 else "",
         "restart_running": service_state(RESTART_UNIT) in ("active", "activating"),
         "restart_log": restart_log(),
         "health_running": service_state(HEALTH_UNIT) in ("active", "activating"),
@@ -257,7 +270,10 @@ font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 a{color:var(--accent)}
 .ctl{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
 .ctl button{font:inherit;font-size:14px;padding:7px 12px;border-radius:9px;border:1px solid var(--line);
-background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
+background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
+.ctl button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}
+.slider{display:flex;justify-content:space-between;margin:10px 0 0}
+input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
 </style></head><body><main>
 <h1>Idle Obelisk bot</h1>
 <div class="sub">updated {{ d.now.strftime('%a %H:%M:%S') }} · refreshes every minute</div>
@@ -267,21 +283,36 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin
  {% if d.service != 'active' %}<span class="badge bad">bot {{ d.service }}</span>
  {% elif d.paused_until %}<span class="badge warn">paused {{ 'until resumed' if d.paused_until == 'forever' else 'until ' + pause_until_txt }}</span>
  {% elif d.cloud_conflict %}<span class="badge warn">paused: cloud conflict</span>
+ {% elif d.keep_open %}<span class="badge ok">game kept open until {{ d.keep_open_until.strftime('%H:%M') }}</span>
  {% elif d.in_session %}<span class="badge ok">in a session now</span>
  {% else %}<span class="badge ok">running · game in background</span>{% endif %}
  <div class="kv" style="margin-top:10px">
   <span>Last session</span><span>{% if d.last_end %}{{ d.last_end.strftime('%H:%M') }} ({{ d.last_len }} s in front){% else %}-{% endif %}</span>
-  <span>Next session</span><span>{{ d.next_session or '-' }}</span>
+  <span>Next session</span><span>{{ 'after keep-open ends' if d.keep_open else d.next_session or '-' }}</span>
   <span>Gems</span><span>{{ d.gem_now if d.gem_now is not none else '-' }}</span>
   <span>Controls</span><span>
    <form method="post" action="control" class="ctl">
     {% if d.paused_until %}<button name="a" value="resume">Resume</button>
     {% else %}<button name="a" value="pause1">Pause 1 h</button><button name="a" value="pause4">Pause 4 h</button><button name="a" value="pause">Pause until resumed</button>{% endif %}
-    <button name="a" value="now" {{ 'disabled' if d.paused_until or d.session_now or d.in_session }}>{{ 'Session requested…' if d.session_now else 'Run a session now' }}</button>
+    <button name="a" value="now" {{ 'disabled' if d.paused_until or d.session_now or d.in_session or d.keep_open }}>{{ 'Session requested…' if d.session_now else 'Run a session now' }}</button>
    </form>
    <span class="sub">Pause before playing on the Pi; a running session finishes first.</span></span>
   <span>Cloud</span><span>{% if d.cloud_conflict %}<b style="color:var(--warn)">conflict:</b> {{ d.cloud_conflict }}{% else %}in sync · last upload {{ d.cloud_last }}{% endif %}</span>
  </div>
+</div>
+
+<div class="card">
+ <h2>Keep game open</h2>
+ {% if d.keep_open %}<span class="badge ok">on · {{ d.keep_open_left }} left</span>{% endif %}
+ <form method="post" action="control">
+  <label class="slider" for="keep-minutes"><span>{{ 'New duration' if d.keep_open else 'Duration' }}</span><b class="keep-len">{{ keep_default_txt }}</b></label>
+  <input type="range" id="keep-minutes" name="minutes" min="{{ keep_min }}" max="{{ keep_max }}" step="{{ keep_step }}" value="{{ keep_default }}">
+  <div class="ctl">
+   <button class="primary" name="a" value="keep_open" {{ 'disabled' if d.paused_until or d.cloud_conflict }}>{{ 'Change to' if d.keep_open else 'Keep open for' }} <span class="keep-len">{{ keep_default_txt }}</span></button>
+   {% if d.keep_open %}<button name="a" value="keep_stop">Stop now</button>{% endif %}
+  </div>
+ </form>
+ <span class="sub">{% if d.paused_until %}Resume the bot first.{% elif d.cloud_conflict %}Unavailable during a cloud conflict.{% else %}The game stays on screen so buffs tick, and the bot keeps claiming. No cloud uploads until it ends; then normal sessions resume.{% endif %}</span>
 </div>
 
 <div class="card">
@@ -324,7 +355,7 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin
 
 <div class="card"><h2>Latest screen</h2>
  {% if d.latest_mtime %}<a href="latest.jpg"><img class="shot" src="latest.jpg?v={{ d.latest_mtime.timestamp()|int }}" alt="last session screenshot"></a>
- <div class="sub" style="text-align:center;margin:6px 0 0">end of the session at {{ d.latest_mtime.strftime('%a %H:%M') }}</div>
+ <div class="sub" style="text-align:center;margin:6px 0 0">saved {{ d.latest_mtime.strftime('%a %H:%M') }}</div>
  {% else %}none yet (saved at the end of each session){% endif %}
 </div>
 
@@ -341,6 +372,22 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}ul{margin
  {% if d.failures %}<div class="gallery">{% for f in d.failures %}<a href="fail/{{ f }}"><img loading="lazy" src="fail/{{ f }}?w=200" alt="">{{ f[9:30] }}</a>{% endfor %}</div>
  {% else %}none{% endif %}
 </div>
+<script>
+// the page reloads every minute: remember the slider (this phone only)
+(function () {
+  var s = document.getElementById("keep-minutes"), KEY = "keepMinutes";
+  function show() {
+    var h = Math.floor(s.value / 60), m = s.value % 60, txt = (h ? h + " h" : "") + (h && m ? " " : "") + (m || !h ? m + " min" : "");
+    document.querySelectorAll(".keep-len").forEach(function (e) { e.textContent = txt; });
+  }
+  try { var v = localStorage.getItem(KEY); if (v) s.value = v; } catch (e) {}
+  s.addEventListener("input", function () {
+    show();
+    try { localStorage.setItem(KEY, s.value); } catch (e) {}
+  });
+  show();
+})();
+</script>
 </main></body></html>"""
 
 REPORT = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -370,7 +417,10 @@ def create_app() -> Flask:
         txt = (dt.datetime.fromtimestamp(float(pu)).strftime("%H:%M")
                if pu not in (None, "forever") else "")
         return render_template_string(PAGE, d=d, chart=gem_svg(d["gems"]), pause_until_txt=txt,
-                                      err=request.args.get("err", "")[:200])
+                                      err=request.args.get("err", "")[:200],
+                                      keep_min=KEEP_MIN, keep_max=KEEP_MAX, keep_step=KEEP_STEP,
+                                      keep_default=KEEP_DEFAULT,
+                                      keep_default_txt=fmt_minutes(KEEP_DEFAULT))
 
     @app.post("/restart")
     def restart():
@@ -386,6 +436,8 @@ def create_app() -> Flask:
         st = State()
         a = request.form.get("a")
         now = dt.datetime.now().timestamp()
+        if a in ("pause1", "pause4", "pause"):
+            st.set("keep_open_until", None)         # a pause means the user wants the game
         if a == "pause1":
             st.set("paused_until", now + 3600)
         elif a == "pause4":
@@ -396,6 +448,14 @@ def create_app() -> Flask:
             st.set("paused_until", None)
         elif a == "now":
             st.set("session_now", True)
+        elif a == "keep_open":
+            minutes = request.form.get("minutes", type=int)
+            if minutes is None or not KEEP_MIN <= minutes <= KEEP_MAX:
+                abort(400)
+            if not (st.get("paused_until") or st.get("cloud_conflict")):
+                st.set("keep_open_until", now + minutes * 60)
+        elif a == "keep_stop":
+            st.set("keep_open_until", None)
         else:
             abort(400)
         return redirect("./", code=303)

@@ -29,6 +29,21 @@ is ever missed):
 A session takes ~30 s. `python -m obelisk run --always-open` keeps the game
 open instead (burns buff timers).
 
+### Keep-open mode (dashboard)
+
+To make use of buffs, the dashboard's **Keep game open** card holds the game on
+screen for a chosen time: set the slider (15 min to 12 h), press the button.
+Between sessions that starts one at once. Founder crates, lootbugs and freebies
+are still claimed, the watchdog brings the game back if it leaves the front, and
+the mode carries on after a bot restart. Press the button again to change the
+time, or Stop now to end early. Pausing the bot ends it too.
+
+There are no cloud uploads during the mode, since the game only fetches cloud
+info at startup. When it ends the game goes to the background, and 30 s later a
+normal session restarts it, checks the cloud and uploads. A phone save with more
+play time uploaded in the meantime wins as usual, so the Pi's progress from the
+mode is then lost. A cloud conflict cancels the mode.
+
 ## Cloud saves (policy: never overwrite another device's progress)
 
 After each upload the bot remembers the cloud play time. If the cloud later

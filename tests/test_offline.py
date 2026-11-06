@@ -35,6 +35,8 @@ from obelisk.session import SessionPlanner        # noqa: E402
 
 # keep test artefacts out of the real logs/
 _TMP = Path(tempfile.mkdtemp(prefix="obelisk-tests-"))
+import obelisk.scheduler as _sched                 # noqa: E402
+_sched.LATEST = _TMP / "latest.jpg"
 _jobs.FAIL_DIR = _TMP / "failures"
 _gems.UNREAD_DIR = _TMP / "gem_unread"
 _pt.UNREAD_DIR = _TMP / "playtime_unread"
@@ -608,6 +610,149 @@ def test_dashboard_controls_need_token():
     assert c.post("/control", data={"a": "resume"}).status_code == 303
     assert _jobs.State().get("paused_until") is None
     assert c.get("/").status_code == 200
+
+
+def _keep_open_sched(clock, cloud=None):
+    """Scheduler on the no-bugs mining screen, between sessions (next one far off)."""
+    st = _jobs.State()
+    st.set("keep_open_until", None); st.set("paused_until", None)
+    dev = FakeDevice("no_bugs", {}, in_front=False, after_launch=("no_bugs",))
+    planner = SessionPlanner(clock=lambda: clock[0])
+    planner.next_start = clock[0] + 40 * 60
+    return dev, planner, Scheduler(dev, [], poll=0, planner=planner, cloud=cloud), st
+
+
+def test_keep_open_holds_the_session_past_its_limit_then_returns_to_normal():
+    clock = [6_000_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock)
+    sched.session_step()
+    assert dev.launches == 0 and planner.started is None       # mode off: waits for its time
+    until = clock[0] + 2 * 3600
+    st.set("keep_open_until", until)
+    sched.session_step()
+    assert dev.launches == 1 and planner.started is not None   # starts without waiting
+    for _ in range(5):                                         # far past MAX_SESSION
+        clock[0] += 20 * 60
+        sched.session_step()
+        assert dev.homes == 0 and dev.in_front and sched.session_failed is False
+    assert sched.kept_until == until
+    clock[0] = until                                           # time is up
+    sched.session_step()
+    assert dev.homes == 1 and planner.started is None and sched.kept_until is None
+    assert _jobs.State().get("keep_open_until") is None
+    assert planner.next_start == clock[0] + planner.SAVE_WAIT  # game saves on HOME first
+    sched.session_step()
+    assert dev.launches == 1                                   # not force-stopped straight away
+    clock[0] += planner.SAVE_WAIT
+    sched.session_step()
+    assert dev.launches == 2 and planner.started is not None   # the normal closing session
+    sched.session_step()
+    assert dev.homes == 2                                      # and it ends by itself
+    assert planner.next_start == clock[0] + planner.EVERY      # back on the 50 min rhythm
+
+
+def test_keep_open_end_does_not_upload_on_stale_cloud_info():
+    class Cloud:
+        calls = []
+        def check(self, dev):
+            self.calls.append("check"); return "in_sync"
+        def upload(self, dev):
+            self.calls.append("upload"); return "uploaded"
+    clock = [6_100_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock, Cloud())
+    st.set("keep_open_until", clock[0] + 3600)
+    sched.session_step(); sched.session_step()
+    st.set("keep_open_until", None)                            # Stop now on the dashboard
+    sched.session_step()
+    assert dev.homes == 1 and Cloud.calls == ["check"]         # HOME, no upload yet
+    clock[0] += planner.SAVE_WAIT
+    sched.session_step(); sched.session_step()
+    assert dev.homes == 2 and Cloud.calls == ["check", "check", "upload"]
+    assert dev.launches == 2                                   # upload follows a fresh restart
+
+
+def test_pause_ends_keep_open():
+    clock = [6_200_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock)
+    st.set("keep_open_until", clock[0] + 3600)
+    sched.session_step(); sched.session_step()
+    assert sched.kept_until and dev.homes == 0
+    st.set("paused_until", "forever")
+    sched.session_step()
+    assert dev.homes == 1 and _jobs.State().get("keep_open_until") is None
+    clock[0] += 3600
+    sched.session_step()
+    assert dev.launches == 1                                   # paused: no new session
+    st.set("paused_until", None)
+
+
+def test_cloud_conflict_cancels_keep_open_without_a_restart_loop():
+    class Cloud:
+        def check(self, dev):
+            return "conflict"
+        def upload(self, dev):
+            raise AssertionError("uploaded during a conflict")
+    clock = [6_300_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock, Cloud())
+    st.set("keep_open_until", clock[0] + 3600)
+    sched.session_step()
+    assert dev.homes == 1 and _jobs.State().get("keep_open_until") is None
+    clock[0] += planner.SAVE_WAIT
+    sched.session_step()
+    assert dev.launches == 1 and planner.started is None
+
+
+def test_keep_open_comes_back_after_a_bot_restart():
+    clock = [6_400_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock)
+    st.set("keep_open_until", clock[0] + 3600)
+    sched.session_step(); sched.session_step()
+    # a new process: no memory of the mode except state.json
+    fresh = Scheduler(dev, [], poll=0, planner=SessionPlanner(clock=lambda: clock[0]))
+    fresh.session_step(); fresh.session_step()
+    assert fresh.kept_until and fresh.planner.started is not None
+    st.set("keep_open_until", None)
+
+
+def test_dashboard_keep_open_controls():
+    import obelisk.dashboard as D
+    D.CONF = _TMP / "dash.conf"
+    logs, D.LOGS = D.LOGS, _TMP                               # state.json = the tests' State file
+    try:
+        app = D.create_app(); tok = D.ensure_conf()["token"]
+        c = app.test_client()
+        assert c.post("/control", data={"a": "keep_open", "minutes": 90}).status_code == 403
+        c.get("/?t=" + tok)
+        st = _jobs.State(); st.set("keep_open_until", None); st.set("paused_until", None)
+        st.set("cloud_conflict", None)
+        page = c.get("/").get_data(as_text=True)
+        assert 'name="minutes"' in page and "Keep open for" in page and "Stop now" not in page
+        before = dt.datetime.now().timestamp()
+        assert c.post("/control", data={"a": "keep_open", "minutes": 90}).status_code == 303
+        assert before + 5400 <= _jobs.State().get("keep_open_until") <= before + 5410
+        page = c.get("/").get_data(as_text=True)
+        assert "Stop now" in page and "game kept open until" in page and "1 h 30 min left" in page
+        for bad in ("", "abc", "5", "9999"):                  # slider range only
+            assert c.post("/control", data={"a": "keep_open", "minutes": bad}).status_code == 400
+        assert c.post("/control", data={"a": "keep_stop"}).status_code == 303
+        assert _jobs.State().get("keep_open_until") is None
+        st.set("keep_open_until", dt.datetime.now().timestamp() + 600)   # pausing ends it
+        assert c.post("/control", data={"a": "pause1"}).status_code == 303
+        assert _jobs.State().get("keep_open_until") is None
+        assert c.post("/control", data={"a": "keep_open", "minutes": 60}).status_code == 303
+        assert _jobs.State().get("keep_open_until") is None   # refused while paused
+        assert c.post("/control", data={"a": "resume"}).status_code == 303
+        st.set("cloud_conflict", "x")
+        assert c.post("/control", data={"a": "keep_open", "minutes": 60}).status_code == 303
+        assert _jobs.State().get("keep_open_until") is None   # refused during a conflict
+        st.set("cloud_conflict", None)
+        st.set("keep_open_until", dt.datetime.now().timestamp() - 5)     # ran out, bot not looked yet
+        assert "Stop now" not in c.get("/").get_data(as_text=True)
+        st.set("keep_open_until", None)
+        assert D.fmt_minutes(15) == "15 min" and D.fmt_minutes(60) == "1 h"
+        assert D.fmt_minutes(135) == "2 h 15 min"
+    finally:
+        D.LOGS = logs
 
 
 def test_scheduler_never_presses_off_mining_screen():

@@ -6,6 +6,9 @@
   e.g. the Lootbug gem-shop popup, which is closed via its X).
 * Jobs only run from the mining screen, in priority order; the first due job
   runs and the loop starts over with a fresh frame.
+* Keep-open mode (dashboard): a session that stays open until a chosen time, so
+  the buffs tick. It ends through the normal path: HOME, then a fresh session
+  whose game restart gets current cloud info before anything is uploaded.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from . import screens
 from .gems import stable_gems
 from .notify import alert
 from .outage import report_up
-from .jobs import JobAborted, save_failure, wait_for
+from .jobs import JobAborted, State, save_failure, wait_for
 
 # Exit code for "stopped on purpose after repeated job failures"; the
 # systemd unit must NOT restart on it (RestartPreventExitStatus=3).
@@ -50,6 +53,11 @@ def save_latest(dev) -> None:
         log.debug("could not save latest frame: %s", e)
 
 
+def pause_active(until, now: float) -> bool:
+    """`until` is state "paused_until": None, "forever" or a timestamp."""
+    return until is not None and (until == "forever" or now < float(until))
+
+
 class Scheduler:
     """Failure policy: a JobAborted counts as a failure. The bot stops (exit 3,
     systemd won't restart it) after `max_failures` failures in a row within
@@ -60,6 +68,7 @@ class Scheduler:
     FOREGROUND_EVERY = 60      # seconds between "is the game in front?" checks
     LAUNCH_WAIT = 90           # seconds to wait for the mining screen after a relaunch
     MAX_FAILED_SESSIONS = 3
+    KEEP_OPEN_SHOT_EVERY = 5 * 60   # seconds between dashboard pictures in keep-open mode
 
     def __init__(self, dev, jobs, interrupts=(), poll: float = 2.0,
                  max_unknown: int = 15, max_failures: int = 3, planner=None, cloud=None):
@@ -80,6 +89,8 @@ class Scheduler:
         self.session_t0 = None          # monotonic start of the current session
         self.cloud = cloud              # CloudSync, or None
         self.pause_logged = False
+        self.kept_until = None          # this session is being held open until then
+        self.last_shot = float("-inf")
 
     def run_forever(self) -> None:
         while True:
@@ -95,11 +106,10 @@ class Scheduler:
     def control(self, now: float) -> str | None:
         """Dashboard controls via state.json: 'paused' (with reason) or None.
         Also applies a requested 'session_now'."""
-        from .jobs import State
         st = State()
         until = st.get("paused_until")
         if until is not None:
-            if until == "forever" or now < float(until):
+            if pause_active(until, now):
                 if not self.pause_logged:
                     log.info("paused from the dashboard (%s)", "until resumed" if until == "forever"
                              else "until " + time.strftime("%H:%M", time.localtime(float(until))))
@@ -123,14 +133,54 @@ class Scheduler:
             if self.control(now) == "paused":
                 self.dev.sleep(10.0)
                 return
-            if now < p.next_start:
-                self.dev.sleep(min(10.0, p.next_start - now))
+            start_at = p.earliest if self.keep_open_until(now) else max(p.next_start, p.earliest)
+            if now < start_at:
+                self.dev.sleep(min(10.0, start_at - now))
                 return
             self.begin_session()
             return
         self.tick()
-        if self.session_complete(p.clock()):
+        now = p.clock()
+        until = self.keep_open_until(now)
+        if until:
+            self.keep_open_step(now, until)
+        elif self.kept_until:
+            self.end_keep_open()
+        elif self.session_complete(now):
             self.end_session()
+
+    # ---- keep-open mode (the game stays in front, buffs tick) --------------
+
+    def keep_open_until(self, now: float) -> float | None:
+        """State "keep_open_until" if the mode is on. The dashboard sets it, so
+        it survives bot restarts; running out or a pause clears it."""
+        st = State()
+        until = st.get("keep_open_until")
+        if until is None:
+            return None
+        if now < float(until) and not pause_active(st.get("paused_until"), now):
+            return float(until)
+        st.set("keep_open_until", None)
+        return None
+
+    def keep_open_step(self, now: float, until: float) -> None:
+        if until != self.kept_until:    # just started, or the dashboard changed the time
+            self.kept_until = until
+            log.info("keep-open: the game stays in front until %s",
+                     time.strftime("%H:%M", time.localtime(until)))
+        if self.last_screen == screens.MINING and not self.session_failed:
+            report_up()                 # hours can pass before this session ends
+        if now - self.last_shot >= self.KEEP_OPEN_SHOT_EVERY:
+            self.last_shot = now
+            save_latest(self.dev)
+
+    def end_keep_open(self) -> None:
+        """No upload yet: the cloud info on screen is as old as this session, and
+        the phone may have uploaded since. HOME saves the game; the next session
+        restarts it, reads the cloud afresh and uploads if that is safe."""
+        self.kept_until = None
+        log.info("keep-open: over; game to background, then a normal session")
+        self.end_session(upload=False, next_soon=True)
 
     def begin_session(self) -> None:
         self.planner.start()
@@ -157,6 +207,9 @@ class Scheduler:
             self.settle()                      # reloaded: Offline Gains popups again
         if result in ("conflict", "cloud_newer"):
             log.warning("session skipped: cloud save conflict (see 'python -m obelisk cloud --status')")
+            if State().get("keep_open_until") is not None:
+                log.warning("keep-open: cancelled by the cloud save conflict")
+                State().set("keep_open_until", None)
             self.end_session(upload=False)
 
     SETTLE_TIMEOUT = 60
@@ -250,12 +303,14 @@ class Scheduler:
                 return True
         return False
 
-    def end_session(self, upload: bool = True) -> None:
+    def end_session(self, upload: bool = True, next_soon: bool = False) -> None:
         if upload and self.cloud is not None and self.last_screen == screens.MINING:
             self.cloud_step("upload")
         save_latest(self.dev)
         self.dev.go_home()
         length = self.planner.finish()
+        if next_soon:
+            self.planner.next_start = self.planner.earliest
         log.info("session end: %d s online; next session %s", length,
                  time.strftime("%H:%M:%S", time.localtime(self.planner.next_start)))
         self.record_session_result()
