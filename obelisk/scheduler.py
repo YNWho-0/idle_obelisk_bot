@@ -29,6 +29,11 @@ from .jobs import JobAborted, State, save_failure, wait_for
 # systemd unit must NOT restart on it (RestartPreventExitStatus=3).
 EXIT_TOO_MANY_FAILURES = 3
 
+# Auto-restarts of Waydroid for broken Android sound (see Device.audio_broken):
+# if it is broken again within this long of the last one, the restart didn't
+# help, so stop for a human instead of restarting in a loop.
+AUDIO_RESTART_GAP = 6 * 3600
+
 # Screens that mean "the game is up" after a (re)launch; popups on them are
 # handled by the interrupts.
 GAME_READY = (screens.MINING, screens.OFFLINE_OPTIONS, screens.OFFLINE_RESULTS,
@@ -495,12 +500,44 @@ class Scheduler:
                   "Check the game before restarting.", tags="rotating_light,gem")
 
     def wait_for_game(self) -> bool:
+        started = time.time() - 30        # the launch was just before this call
         if wait_for(self.dev, lambda f: screens.identify(f) in GAME_READY,
                     timeout=self.LAUNCH_WAIT, interval=3) is None:
             log.error("game (re)started but no known screen within %d s", self.LAUNCH_WAIT)
             save_failure(self.dev.capture(), "relaunch_no_known_screen")
+            if self.dev.audio_broken(started):
+                self.restart_for_audio()
             return False
         return True
+
+    def restart_for_audio(self, now: "float | None" = None, start_restart=None) -> None:
+        """The game crashes at start because Android's sound is out of memory:
+        restart the Waydroid session + bot (the dashboard's restart, in its own
+        unit, which also starts this service again). Exits; never returns."""
+        now = time.time() if now is None else now
+        st = State()
+        last = st.get("audio_restart_at")
+        if last is not None and now - last < AUDIO_RESTART_GAP:
+            self.stop("android_audio", "Obelisk bot STOPPED: game crashes on start",
+                      "The game crashes at start because Android's sound is out of memory, "
+                      f"and restarting Waydroid {(now - last) / 60:.0f} min ago didn't fix it. "
+                      "Try rebooting the Pi.")
+        log.error("the game crashes at start: Android's sound is out of memory; "
+                  "restarting the Waydroid session and the bot")
+        if start_restart is None:
+            from .dashboard import start_restart
+        err = start_restart("all")
+        if err:
+            self.stop("android_audio", "Obelisk bot STOPPED: game crashes on start",
+                      "The game crashes at start because Android's sound is out of memory, "
+                      f"and the Waydroid restart couldn't start ({err}). "
+                      "Use the dashboard's Restart Waydroid + bot.")
+        st.set("audio_restart_at", now)
+        alert("android_audio", "Obelisk: restarting Waydroid",
+              "The game crashed at start because Android's sound ran out of memory. "
+              "The bot is restarting Waydroid and itself; nothing to do unless another alert follows.",
+              tags="arrows_counterclockwise", force=True)
+        raise SystemExit(0)           # Restart=on-failure: the restart script starts us again
 
     def ensure_game_in_front(self, planned: bool = False) -> None:
         if self.dev.game_in_front():

@@ -25,6 +25,12 @@ log = logging.getLogger("obelisk.device")
 PRESS_MS = 150
 SAVE_WAIT = 30      # seconds between HOME (the game saves then) and a force-stop
 
+# 2026-11-07: after 4 days up, Android's sound service ran out of memory. Every
+# new sound stream then failed with -12 (ENOMEM) and the game crashed 2 s into
+# each launch, in Audio_Init. Restarting the Waydroid session cures it.
+AUDIO_NO_TRACK = "AudioFlinger could not create track, status: -12"
+AUDIO_CRASH = "Audio_Init()"
+
 
 class DeviceError(RuntimeError):
     pass
@@ -118,6 +124,20 @@ class Device:
             if "topResumedActivity" in line or "mResumedActivity" in line:
                 return f"{PACKAGE}/" in line
         return False
+
+    def audio_broken(self, since: float) -> bool:
+        """True if, since `since` (Unix time), Android refused a sound stream for
+        lack of memory and the game crashed in its sound start-up. Android shares
+        the Pi's clock. Never raises: an unreadable log counts as False."""
+        if self.dry_run:
+            return False
+        try:
+            out = self._adb("logcat", "-d", "-v", "epoch", "-t", f"{since:.3f}",
+                            timeout=20).decode(errors="replace")
+        except DeviceError as e:
+            log.debug("could not read the Android log: %s", e)
+            return False
+        return AUDIO_NO_TRACK in out and AUDIO_CRASH in out
 
     def game_version(self) -> "str | None":
         """Installed version, e.g. '2.2.52'; None if it can't be read."""

@@ -131,6 +131,10 @@ class FakeDevice:
         self.in_front, self.after_launch = in_front, after_launch
         self.launches = self.homes = 0
         self.version = "2.2.52"
+        self.audio = False
+
+    def audio_broken(self, since):
+        return self.audio
 
     def capture(self) -> np.ndarray:
         name = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
@@ -1430,6 +1434,71 @@ def test_outage_alert_carries_health_picture():
     out.report_down("crashed", "E", st, 1000.0, snd, image_fn=fn)
     out.report_down("crashed", "E", st, 1060.0, snd, image_fn=fn)   # quiet retry: no picture taken
     assert len(calls) == 1 and sent[0][2] == "/tmp/h.png" and sent[0][1].startswith("REBOOT THE PI")
+
+
+# real lines from the 2026-11-07 outage (Android sound out of memory)
+AUDIO_LOG = b"""\
+  1794088782.237    89 30430 E AudioFlinger: createTrack_l() initCheck failed -12; no control block?
+  1794088782.238 126004 60521 E AudioTrack: createTrack_l(0): AudioFlinger could not create track, status: -12 output 0
+  1794088782.238 126004 60521 E libOpenSLES: AudioTrack::initCheck status 4294967284
+  1794088782.367 126004 60521 F DEBUG   :       #03 pc 00000000011e9c14  /data/app/x/split_config.arm64_v8a.apk!libyoyo.so (offset 0x134000) (Audio_Init()+640)
+"""
+
+
+def test_device_spots_broken_android_audio():
+    import obelisk.device as d
+    dev = d.Device()
+    calls = []
+    dev._adb = lambda *a, **k: calls.append(a) or AUDIO_LOG
+    assert dev.audio_broken(1794088700.0)
+    assert calls[0] == ("logcat", "-d", "-v", "epoch", "-t", "1794088700.000")
+    dev._adb = lambda *a, **k: AUDIO_LOG.splitlines()[1]           # sound refused, no crash
+    assert not dev.audio_broken(0)
+    dev._adb = lambda *a, **k: b"I yoyo    : Audio_Init()\n"          # normal start
+    assert not dev.audio_broken(0)
+    dev._adb = lambda *a, **k: (_ for _ in ()).throw(d.DeviceError("offline"))
+    assert not dev.audio_broken(0)
+
+
+def test_broken_audio_restarts_waydroid_once_then_stops():
+    import obelisk.scheduler as sc
+    sent, restarts = [], []
+    orig_alert, orig_wait = sc.alert, sc.Scheduler.wait_for_game
+    sc.alert = lambda key, title, *a, **k: sent.append(title) or True
+    st = _jobs.State(); st.set("audio_restart_at", None)
+    try:
+        dev = FakeDevice("blank", {}, after_launch=("blank",))         # home screen: not the game
+        s = Scheduler(dev, [], poll=0)
+        s.LAUNCH_WAIT = 0
+        assert s.wait_for_game() is False and restarts == []        # unknown screen, sound fine
+        dev.audio = True
+        s.restart_for_audio = lambda: restarts.append(1)
+        assert s.wait_for_game() is False and restarts == [1]       # wired to the launch check
+        del s.restart_for_audio
+        go = lambda what: restarts.append(what)
+        try:
+            s.restart_for_audio(now=1000.0, start_restart=go)
+            raise AssertionError("must exit")
+        except SystemExit as e:
+            assert e.code == 0
+        assert restarts[-1] == "all" and st.get("audio_restart_at") == 1000.0
+        assert sent == ["Obelisk: restarting Waydroid"]
+        try:                                                        # back within 6 h: give up
+            s.restart_for_audio(now=1000.0 + 3600, start_restart=go)
+            raise AssertionError("must exit")
+        except SystemExit as e:
+            assert e.code == sc.EXIT_TOO_MANY_FAILURES
+        assert restarts.count("all") == 1 and "STOPPED" in sent[-1]
+        st.set("audio_restart_at", None)                            # restart can't start: stop
+        try:
+            s.restart_for_audio(now=50000.0, start_restart=lambda w: "a restart is already running")
+            raise AssertionError("must exit")
+        except SystemExit as e:
+            assert e.code == sc.EXIT_TOO_MANY_FAILURES
+        assert st.get("audio_restart_at") is None
+    finally:
+        sc.alert, sc.Scheduler.wait_for_game = orig_alert, orig_wait
+        st.set("audio_restart_at", None)
 
 
 if __name__ == "__main__":
