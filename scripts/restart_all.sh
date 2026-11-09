@@ -5,8 +5,8 @@
 # Usage: restart_all.sh [bot]     "bot" = only restart the bot service.
 # Progress goes to logs/restart.log (shown on the dashboard).
 
-LOG="$HOME/idle_obelisk_bot/logs/restart.log"
-BOT="$HOME/idle_obelisk_bot"
+BOT=$(cd "$(dirname "$0")/.." && pwd)     # the repo, wherever it was cloned
+LOG="$BOT/logs/restart.log"
 ADB_SERIAL=$(cd "$BOT" && venv/bin/python -c 'from obelisk import ADB_SERIAL; print(ADB_SERIAL)')
 mkdir -p "$(dirname "$LOG")"
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }

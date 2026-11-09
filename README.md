@@ -3,12 +3,81 @@
 Runs on a Raspberry Pi 5 against the Android game in Waydroid, via ADB +
 OpenCV. It never presses anything that costs gems.
 
+> **Use at your own risk.** This is an unofficial hobby project, not made or
+> endorsed by the game's developer. Automating a game may break its terms of
+> service. It was built and tested on one setup (Raspberry Pi 5, game v2.2.51);
+> a game update can move buttons and stop it working until the anchors are
+> re-cut. See [Install](#install) to set it up yourself.
+
 | Job | What it does | Verified by |
 |---|---|---|
 | **founder** | Presses the "FOUNDER" parachute crate | crate disappears |
 | **lootbug** | Presses a lootbug on the field (one press loots all), then closes the Lootbug popup (a gem shop) with its top-right X only | popup opens, then mining screen returns |
 | **freebie** | Store → (scrolls to) Freebie Pack → Claim (only if green) → close | button turns dimmed red |
 | **cloud** | Cloud screen: re-disables in-game Cloud Auto-Save, then uploads the save (two presses) unless another device has uploaded since | cloud play time changes |
+
+## Install
+
+What you need: a Raspberry Pi 5 (any arm64/x86 Linux box that runs Waydroid
+should work, untested) with a Wayland desktop, Python 3.11+, and the game on a
+Google account so it can sync with your phone.
+
+1. **Waydroid with Google Play.** Install Waydroid
+   ([docs](https://docs.waydro.id/)) and initialise it with the GAPPS image
+   (`sudo waydroid init -s GAPPS`). Start it, sign in to Play, install
+   Idle Obelisk Miner, open it once and log in to your Checkbox/Google account.
+2. **adb.** `sudo apt install adb`. Find Android's IP with `waydroid status`
+   and connect: `adb connect <ip>:5555`. If the IP isn't `192.168.240.112`, set
+   it for the bot: `export OBELISK_ADB_SERIAL=<ip>:5555`, and add
+   `Environment=OBELISK_ADB_SERIAL=<ip>:5555` to each unit in `systemd/`.
+3. **Resolution.** The bot only understands the 720x1280 layout:
+   `adb shell wm size 720x1280` (the bot re-applies it if it's lost).
+4. **The code.** Clone into your home folder (the systemd units and the
+   autostart entry expect `~/idle_obelisk_bot`):
+
+   ```bash
+   sudo apt install grim               # Pi desktop screenshots (health check)
+   git clone https://github.com/YNWho-0/idle_obelisk_bot ~/idle_obelisk_bot
+   cd ~/idle_obelisk_bot
+   python3 -m venv venv
+   venv/bin/pip install -r requirements.txt
+   venv/bin/python -I tests/test_offline.py     # should pass, no device needed
+   venv/bin/python -m obelisk peek              # one live capture: is adb working?
+   ```
+5. **In-game settings.** In the game: grid menu -> Options. Then run
+   `venv/bin/python -I scripts/set_options.py`, which turns off the visual
+   effects the bot can't see through and turns the Lootbug gem confirmation
+   back on (a safety net). Your current values are not saved, so note them
+   first if you want them back (`docs/game_settings.md` lists the rows). Also turn
+   off **Toggle Cloud Auto-Save** on the Cloud screen; the bot uploads itself.
+   Turn off "Consume Buff Timers and Items Buffs offline" so buffs don't run
+   down while the game is in the background.
+6. **Android quiet.** Optional but recommended: turn off things that pop up
+   over the game or sleep the screen (heads-up notifications, screen timeout).
+   `docs/android_settings.md` lists the exact `adb shell settings` commands used.
+7. **Phone alerts** (optional). Install the [ntfy](https://ntfy.sh) app,
+   subscribe to a long random topic name, and put it in `notify.conf`:
+
+   ```bash
+   printf 'topic=%s\n' "<your-random-topic>" > notify.conf && chmod 600 notify.conf
+   venv/bin/python -m obelisk notify-test
+   ```
+
+   Anyone who knows the topic can read your alerts, so make it hard to guess.
+8. **Run it as services.**
+
+   ```bash
+   sudo loginctl enable-linger "$USER"          # keep running after logout
+   for u in systemd/*.service systemd/*.timer; do systemctl --user link "$PWD/$u"; done
+   systemctl --user enable --now obelisk-bot obelisk-dashboard
+   systemctl --user enable --now obelisk-summary.timer obelisk-health.timer obelisk-bootcheck.timer
+   cp systemd/waydroid-obelisk.desktop ~/.config/autostart/   # start Waydroid + game at login
+   ```
+
+   The dashboard listens on port 8765. Its first start writes a random token to
+   `dashboard.conf`; open `http://<pi-ip>:8765/?t=<token>` once on your phone.
+   Add `url=http://<pi-ip>:8765/` to `dashboard.conf` to open it when you tap an
+   alert. Keep port 8765 off the internet.
 
 ## Sessions: the game stays in the background
 

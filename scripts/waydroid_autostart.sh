@@ -4,7 +4,7 @@
 # reboot left Android without its IPv4 address (DHCP race), so adb and the
 # bot couldn't reach it; if that happens, restart the session once.
 
-LOG="$HOME/idle_obelisk_bot/logs/autostart.log"
+LOG="$(cd "$(dirname "$0")/.." && pwd)/logs/autostart.log"
 mkdir -p "$(dirname "$LOG")"
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 
