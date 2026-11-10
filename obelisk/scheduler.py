@@ -211,12 +211,15 @@ class Scheduler:
             return
         try:
             bug = screens.lootbug_sprite(frame) is not None
+            stored = screens.lootbug_stored(frame) is not None
             KEEP_OPEN_DIR.mkdir(parents=True, exist_ok=True)
-            path = KEEP_OPEN_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}_{'bug' if bug else 'nobug'}.jpg"
+            path = KEEP_OPEN_DIR / (f"{time.strftime('%Y%m%d-%H%M%S')}_{'bug' if bug else 'nobug'}"
+                                    f"{'_stored' if stored else ''}.jpg")
             cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
             for old in sorted(KEEP_OPEN_DIR.glob("*.jpg"))[:-KEEP_OPEN_KEEP]:
                 old.unlink()
-            log.info("keep-open: picture %s (lootbug seen: %s)", path.name, "yes" if bug else "no")
+            log.info("keep-open: picture %s (lootbug on the field: %s, stored row: %s)", path.name,
+                     "yes" if bug else "no", "yes" if stored else "no")
         except OSError as e:
             log.debug("could not save the keep-open frame: %s", e)
 
@@ -340,7 +343,8 @@ class Scheduler:
             if job.name == "freebie" and job.last_run < self.session_t0:
                 return False
         if any(j.name == "lootbug" for j in self.jobs) and self.last_frame is not None \
-                and screens.lootbug_sprite(self.last_frame) is not None:
+                and (screens.lootbug_stored(self.last_frame) is not None
+                     or screens.lootbug_sprite(self.last_frame) is not None):
             return False
         return True
 

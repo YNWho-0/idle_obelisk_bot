@@ -101,6 +101,11 @@ F = {
     "store_false_header": "n108_store_top_false_header.png",  # "+1% Freebie Pack ..." text, no row
     "cloud_not_loaded": "n109_cloud_not_loaded.png",        # cloud 00d00h00m00s, no version (2026-11-08)
     "cloud_toast": "n110_cloud_toast.png",                  # "Free bomb" toast across the cloud time
+    "hud_stored_1": "n111_hud_stored_1.png",    # stored-lootbug row "1" (y=780) + a bug on the field
+    "hud_stored_2": "n112_hud_stored_2.png",    # row "2", the field bug half hidden by ore
+    "hud_tap_again": "n113_hud_tap_again.png",  # after ONE tap: "Tap again to loot all"
+    "lootall_5": "n114_lootall_5.png",          # Loot-All after the double tap: 5 looted
+    "after_lootall": "n115_after_lootall.png",  # row and field bug both gone
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -1601,6 +1606,77 @@ def test_keep_open_keeps_a_picture_every_5_min():
         assert len(files2) == 1 and files2 != files            # oldest pruned
     finally:
         st.set("keep_open_until", None)
+
+
+# ---------------------------------------------------------------- stored lootbugs, freebie gap
+
+HUD_ROW = (10, 780, 36, 806)
+FIELD_BUG = (262, 593, 300, 695)
+
+
+def test_stored_lootbug_row_is_found_only_when_bugs_are_stored():
+    for k, y in (("hud_stored_1", 780), ("hud_stored_2", 780), ("hud_tap_again", 780),
+                 ("mining_bugs", 643), ("store_full", 643)):
+        m = screens.lootbug_stored(FRAMES[k])
+        assert m is not None and m.box[1] == y, (k, m)
+    for k in ("after_lootall", "crate_gone", "mining_1bug", "store_closed", "no_bugs",
+              "lootall_5", "bug_popup", "grid", "cloud", "options", "store_ready"):
+        assert screens.lootbug_stored(FRAMES[k]) is None, k
+
+
+def test_lootbug_job_double_taps_the_stored_row():
+    dev = FakeDevice("hud_stored_2", {
+        "hud_stored_2": [(HUD_ROW, ["lootall_5"])],
+        "lootall_5": [(BUG_POPUP_X, ["after_lootall"])],
+    })
+    assert LootbugJob().due(1000.0, FRAMES["hud_stored_2"])
+    assert LootbugJob().run(dev) == "looted"
+    assert [p[0] for p in dev.presses] == ["hud_stored_2", "hud_stored_2", "lootall_5"]
+    assert not LootbugJob().due(1000.0, FRAMES["after_lootall"])
+
+
+def test_lootbug_job_retries_a_slow_double_tap_then_falls_back_to_the_field_bug():
+    job = LootbugJob()
+    job.POPUP_WAIT = 0
+    dev = FakeDevice("hud_stored_2", {                  # a slow pair only shows the hint
+        "hud_stored_2": [(HUD_ROW, ["hud_tap_again"])],
+        "hud_tap_again": [(HUD_ROW, ["lootall_5"])],
+        "lootall_5": [(BUG_POPUP_X, ["after_lootall"])],
+    })
+    assert job.run(dev) == "looted"
+    assert [p[0] for p in dev.presses] == ["hud_stored_2"] * 2 + ["hud_tap_again"] * 2 + ["lootall_5"]
+    dev = FakeDevice("hud_stored_2", {                  # the row never answers: press the bug
+        "hud_stored_2": [(HUD_ROW, ["hud_stored_2"]), (FIELD_BUG, ["lootall_5"])],
+        "lootall_5": [(BUG_POPUP_X, ["after_lootall"])],
+    })
+    assert job.run(dev) == "looted"
+    assert [p[0] for p in dev.presses] == ["hud_stored_2"] * 5 + ["lootall_5"]
+
+
+def test_session_is_not_over_while_lootbugs_are_stored():
+    clock = [8_000_000.0]
+    planner = SessionPlanner(clock=lambda: clock[0])
+    dev = FakeDevice("hud_stored_2", {})
+    sched = Scheduler(dev, [LootbugJob()], poll=0, planner=planner)
+    sched.session_t0 = time.monotonic()
+    planner.start()
+    sched.last_screen, sched.last_frame = screens.MINING, FRAMES["hud_stored_2"]
+    assert not sched.session_complete(clock[0])
+    sched.last_frame = FRAMES["after_lootall"]
+    assert sched.session_complete(clock[0])
+
+
+def test_freebie_gap_in_keep_open_mode():
+    job = FreebieJob()
+    now = 50_000.0
+    job.last_run = now - 19 * 60
+    assert not job.due(now, FRAMES["hud_stored_2"])                 # banked, but claimed 19 min ago
+    job.last_run = now - 21 * 60
+    assert job.due(now, FRAMES["hud_stored_2"])                     # 20 min: the bank fills in ~63
+    job.last_run = now - 30
+    assert not job.due(now, FRAMES["store_full"])
+    job.last_run = now - 90
+    assert job.due(now, FRAMES["store_full"])                       # shown full: claim now
 
 
 if __name__ == "__main__":

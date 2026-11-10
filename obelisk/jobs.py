@@ -78,8 +78,13 @@ class FreebieJob:
     """Open Store -> claim Freebie Pack if ready -> verify -> close Store."""
 
     name = "freebie"
-    MIN_GAP = 60 * 60       # claim at most hourly when the badge says ready
+    # Checked in game 2026-11-10: a freebie every 3:19 real (6:58 game time at
+    # game speed 2.10x), bank 19, so an empty bank is full in ~63 min, sooner
+    # with game-speed buffs. Normal sessions claim on arrival; in keep-open mode
+    # this gap applies (it was 60 min, which let the bank overflow).
+    MIN_GAP = 20 * 60       # claim at most this often when the badge says ready
     MAX_GAP = 2 * 60 * 60   # open the Store anyway this often (badge fallback)
+    FULL_GAP = 60           # bank shown full (the Store icon turns solid green): claim now
 
     def __init__(self):
         self.last_run = float("-inf")
@@ -87,6 +92,8 @@ class FreebieJob:
     def due(self, now: float, frame: np.ndarray) -> bool:
         since = now - self.last_run
         if since >= self.MAX_GAP:
+            return True
+        if since >= self.FULL_GAP and screens.store_fill(frame) >= 1.0:
             return True
         return since >= self.MIN_GAP and screens.store_badge(frame)
 
@@ -184,22 +191,54 @@ class LootbugJob:
         if now - self.last_run < self.MIN_GAP or now - self.last_check < self.CHECK_EVERY:
             return False
         self.last_check = now
-        return screens.lootbug_sprite(frame) is not None
+        return (screens.lootbug_stored(frame) is not None
+                or screens.lootbug_sprite(frame) is not None)
 
     def run(self, dev) -> str:
+        """Stored lootbugs: double-tap their row in the left-side list (Loot-All
+        takes the bug on the field too). With the game kept open on 2026-11-06 the
+        bot stopped finding the bug on the field after 33 min while they kept
+        piling up in storage. A lone bug with nothing stored has no row: press it."""
         self.last_run = time.monotonic()
         frame = ensure_mining(dev)
-        bug = screens.lootbug_sprite(frame)
-        if bug is None:
-            return "none"
-        dev.press(*bug.center)
-        if wait_for(dev, lambda f: screens.identify(f) == LOOTBUG_POPUP, timeout=5) is None:
-            raise JobAborted("lootbug popup did not open", dev.capture())
+        row = screens.lootbug_stored(frame)
+        how = "stored row"
+        if row is None or not self._double_tap(dev, row):
+            bug = screens.lootbug_sprite(dev.capture() if row is not None else frame)
+            if bug is None:
+                if row is not None:
+                    raise JobAborted("Loot-All didn't open from the stored-lootbug row", dev.capture())
+                return "none"
+            how = "field"
+            dev.press(*bug.center)
+            if wait_for(dev, lambda f: screens.identify(f) == LOOTBUG_POPUP, timeout=5) is None:
+                raise JobAborted("lootbug popup did not open", dev.capture())
         close_lootbug_popup(dev)
-        if screens.lootbug_sprite(dev.capture()) is not None:
-            log.warning("a lootbug is still on the field after looting (new arrival?)")
-        log.info("lootbugs looted")
+        after = dev.capture()
+        if screens.lootbug_sprite(after) is not None or screens.lootbug_stored(after) is not None:
+            log.warning("a lootbug is still there after looting (new arrival?)")
+        log.info("lootbugs looted (%s)", how)
         return "looted"
+
+    DOUBLE_TAP_TRIES = 2
+    POPUP_WAIT = 3.0        # s for Loot-All to open after a double tap
+
+    def _double_tap(self, dev, row) -> bool:
+        """True once the Loot-All popup is open. The two presses go out back to
+        back (~0.2 s apart, which the game accepts); a slow pair only leaves the
+        "Tap again to loot all" hint, so it is tried once more."""
+        for _ in range(self.DOUBLE_TAP_TRIES):
+            dev.press(*row.center)
+            dev.press(*row.center)
+            if wait_for(dev, lambda f: screens.identify(f) == LOOTBUG_POPUP,
+                        timeout=self.POPUP_WAIT) is not None:
+                return True
+            log.warning("lootbug: the double tap on the stored row didn't open Loot-All")
+            frame = dev.capture()
+            if screens.identify(frame) != MINING:
+                return False
+            row = screens.lootbug_stored(frame) or row
+        return False
 
 
 def close_lootbug_popup(dev) -> None:

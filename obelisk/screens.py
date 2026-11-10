@@ -35,6 +35,13 @@ LOOTBUG_HOMES = {
     "lootbug_red_1": (377, 605, 409, 690),
 }
 
+# Left-side timer list. While at least one lootbug is stored it has a row
+# "[bug] N [bug All]" whose y depends on the buff rows above it (y=643 and y=780
+# seen). Its icon scores 0.86-1.0 there and <= 0.53 on every frame without it.
+# A DOUBLE tap on it opens Loot-All, which also loots the bug on the field
+# (2026-11-10: one tap only shows "Tap again to loot all").
+HUD_LIST: Box = (0, 560, 130, 1110)
+
 # Playfield area where the swaying/falling Founder parachute crate is searched.
 # Crates score 0.61-1.0 on reference frames; frames without a crate <= 0.33.
 FOUNDER_AREA: Box = (40, 90, 690, 1170)
@@ -69,6 +76,7 @@ class A:
             "lootbug_close_2": dict(home=(575, 148, 625, 197)),
             **{n: dict(home=LOOTBUG_HOMES[n], threshold=0.75, search=LOOTBUG_FIELD)
                for n in LOOTBUG_HOMES},
+            "lootbug_stored": dict(home=(10, 780, 36, 806), threshold=0.75, search=HUD_LIST),
             "offline_options_label": dict(home=(214, 704, 506, 763)),
             "offline_confirm":       dict(home=(74, 1168, 646, 1218)),
             "offline_results_label": dict(home=(284, 10, 436, 31)),
@@ -203,6 +211,14 @@ def lootbug_sprite(frame: np.ndarray) -> Optional[Match]:
     if hits:                       # fast path: in-game crops (~0.1 s)
         return max(hits, key=lambda m: m.score)
     return wiki_lootbug(frame)     # all 14 skins, masked (~1.3 s on the Pi)
+
+
+def lootbug_stored(frame: np.ndarray) -> Optional[Match]:
+    """The stored-lootbug row's icon in the left-side list (the double-tap target),
+    or None when no lootbug is stored (a single bug on the field has no row)."""
+    if not right_size(frame):
+        return None
+    return A.get("lootbug_stored").find(frame)
 
 
 def founder_crate(frame: np.ndarray) -> Optional[Match]:

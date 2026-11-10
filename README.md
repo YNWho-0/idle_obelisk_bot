@@ -12,7 +12,7 @@ OpenCV. It never presses anything that costs gems.
 | Job | What it does | Verified by |
 |---|---|---|
 | **founder** | Presses the "FOUNDER" parachute crate | crate disappears |
-| **lootbug** | Presses a lootbug on the field (one press loots all), then closes the Lootbug popup (a gem shop) with its top-right X only | popup opens, then mining screen returns |
+| **lootbug** | Double-taps the stored-lootbug row in the left-side list (Loot-All, which takes the bug on the field too); a lone bug with nothing stored has no row, so it presses that bug instead. Then closes the Lootbug popup (a gem shop) with its top-right X only | popup opens, then mining screen returns |
 | **freebie** | Store → (scrolls to) Freebie Pack → Claim (only if green) → close | button turns dimmed red |
 | **cloud** | Cloud screen: re-disables in-game Cloud Auto-Save, then uploads the save (two presses) unless another device has uploaded since | cloud play time changes |
 
@@ -103,8 +103,10 @@ open instead (burns buff timers).
 To make use of buffs, the dashboard's **Keep game open** card holds the game on
 screen for a chosen time: set the slider (15 min to 12 h), press the button.
 Between sessions that starts one at once. Founder crates, lootbugs and freebies
-are still claimed, the watchdog brings the game back if it leaves the front, and
-the mode carries on after a bot restart. Press the button again to change the
+are still claimed (freebies every 20 min: at game speed 2.10x the bank of 19
+fills in ~63 min, and at once if the Store icon shows the bank full), the
+watchdog brings the game back if it leaves the front, and the mode carries on
+after a bot restart. Press the button again to change the
 time, or Stop now to end early. Pausing the bot ends it too.
 
 There are no cloud uploads during the mode, since the game only fetches cloud

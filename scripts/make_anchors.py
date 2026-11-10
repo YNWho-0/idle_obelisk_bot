@@ -38,6 +38,9 @@ ANCHORS = [
     ("lootbug_close_2", "n106_lootbug_popup_v2252.png", (575, 148, 625, 197)),
     # Lootbug sprite on the field (head + body, no flapping wings)
     ("lootbug_red_1",  "n10_mining_bugs_crate_1.png", (377, 605, 409, 690)),
+    # Left-side timer list: the stored-lootbug row's bug-with-box icon (row only
+    # shows while at least one lootbug is stored; a double tap opens Loot-All)
+    ("lootbug_stored", "n112_hud_stored_2.png",       (10, 780, 36, 806)),
     # Offline Gains popups after the game returns from the background
     ("offline_options_label", "n73_resume5min_2.png",  (214, 704, 506, 763)),
     ("offline_confirm",       "n73_resume5min_2.png",  (74, 1168, 646, 1218)),
