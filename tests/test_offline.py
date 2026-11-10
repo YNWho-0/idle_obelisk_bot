@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -39,6 +40,7 @@ _TMP = Path(tempfile.mkdtemp(prefix="obelisk-tests-"))
 import obelisk.scheduler as _sched                 # noqa: E402
 _sched.LATEST = _TMP / "latest.jpg"
 _sched.FOUNDER_EMPTY_DIR = _TMP / "founder_empty"
+_sched.KEEP_OPEN_DIR = _TMP / "keep_open"
 _jobs.FAIL_DIR = _TMP / "failures"
 _gems.UNREAD_DIR = _TMP / "gem_unread"
 _gems.STABLE_WAIT = 0.05                           # unreadable frames don't wait the real 6 s
@@ -97,6 +99,8 @@ F = {
     "bug_popup_v2252": "n106_lootbug_popup_v2252.png",      # X icon about 1 px off the older one
     "store_odd_y": "n107_store_row_odd_y.png",              # Freebie row on an odd y: header 0.89
     "store_false_header": "n108_store_top_false_header.png",  # "+1% Freebie Pack ..." text, no row
+    "cloud_not_loaded": "n109_cloud_not_loaded.png",        # cloud 00d00h00m00s, no version (2026-11-08)
+    "cloud_toast": "n110_cloud_toast.png",                  # "Free bomb" toast across the cloud time
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -1499,6 +1503,104 @@ def test_broken_audio_restarts_waydroid_once_then_stops():
     finally:
         sc.alert, sc.Scheduler.wait_for_game = orig_alert, orig_wait
         st.set("audio_restart_at", None)
+
+
+# ---------------------------------------------------------------- 2026-11-09 fixes
+
+def test_cloud_waits_out_a_toast_over_the_cloud_time():
+    assert _pt.read_seconds(FRAMES["cloud_toast"], _pt.CLOUD_ROW) is None
+    st = _jobs.State(_TMP / "toast.json")
+    st.set("cloud_last_upload", 490845)
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_toast", "cloud_toast", "cloud_autosave_off"])],
+        "cloud_autosave_off": [(UPLOAD_BTN, ["cloud_armed"])],
+        "cloud_armed": [(UPLOAD_BTN, ["cloud_uploaded"])],
+        "cloud_uploaded": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).upload(dev) == "uploaded"          # was "unreadable": no upload
+
+
+def test_cloud_info_not_loaded_is_no_conflict():
+    assert _pt.read_seconds(FRAMES["cloud_not_loaded"], _pt.CLOUD_ROW) == 0
+    for name, last in (("nl1.json", 584721), ("nl2.json", None)):   # also with no upload record
+        st = _jobs.State(_TMP / name)
+        st.set("cloud_last_upload", last)
+        dev = FakeDevice("crate_gone", {
+            "crate_gone": [(GRID_BTN, ["grid"])],
+            "grid": [(GRID_CLOUD, ["cloud_not_loaded"])],
+            "cloud_not_loaded": [(STORE_X, ["store_closed"])],
+        })
+        cs = CloudSync(st)
+        cs.LOAD_WAIT = 0
+        assert cs.upload(dev) == "unreadable", name
+        assert not st.get("cloud_conflict"), name
+        assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses)
+        assert st.get("cloud_last_upload") == last
+    # loaded a moment later: decided on the real numbers
+    st = _jobs.State(_TMP / "nl3.json")
+    st.set("cloud_last_upload", 490845)
+    dev = FakeDevice("crate_gone", {
+        "crate_gone": [(GRID_BTN, ["grid"])],
+        "grid": [(GRID_CLOUD, ["cloud_not_loaded", "cloud_not_loaded", "cloud_autosave_off"])],
+        "cloud_autosave_off": [(STORE_X, ["store_closed"])],
+    })
+    assert CloudSync(st).check(dev) == "local_newer"
+
+
+def test_frozen_screen_restarts_waydroid_once():
+    import obelisk.outage as out
+    st = _jobs.State(_TMP / "freeze.json")
+    sent, restarts = [], []
+    snd = lambda title, msg, prio, tags, image=None: sent.append(title)
+    go = lambda what: restarts.append(what)
+    frozen = "timeout: adb -s 192.168.240.112:5555 exec-out screencap"
+    t0 = 2_000_000.0
+    assert out.screen_frozen(Exception(frozen)) and not out.screen_frozen("timeout: adb shell input")
+    out.report_down("crashed", frozen, st, t0, snd)
+    assert not out.restart_if_frozen(frozen, st, t0 + 60, go, snd)          # could be a blip
+    assert not out.restart_if_frozen("adb: device offline", st, t0 + 400, go, snd)
+    assert restarts == []
+    out.report_down("crashed", frozen, st, t0 + 300, snd)
+    assert out.restart_if_frozen(frozen, st, t0 + 300, go, snd)
+    assert restarts == ["all"] and st.get("freeze_restart_at") == t0 + 300
+    assert sent[-1] == "Obelisk: restarting Waydroid"
+    t1 = t0 + 3600                                                          # frozen again soon
+    st.set("outage", None)
+    out.report_down("crashed", frozen, st, t1, snd)
+    assert not out.restart_if_frozen(frozen, st, t1 + 600, go, snd) and restarts == ["all"]
+    t2 = t0 + 8 * 3600                                                      # much later: again
+    st.set("outage", None)
+    out.report_down("crashed", frozen, st, t2, snd)
+    assert not out.restart_if_frozen(frozen, st, t2 + 600, lambda w: "busy", snd)   # can't start
+    assert st.get("freeze_restart_at") == t0 + 300
+    assert out.restart_if_frozen(frozen, st, t2 + 660, go, snd) and restarts == ["all", "all"]
+
+
+def test_keep_open_keeps_a_picture_every_5_min():
+    import shutil
+    shutil.rmtree(_sched.KEEP_OPEN_DIR, ignore_errors=True)
+    clock = [7_000_000.0]
+    dev, planner, sched, st = _keep_open_sched(clock)
+    try:
+        st.set("keep_open_until", clock[0] + 3600)
+        sched.session_step()                                   # session starts
+        for _ in range(3):
+            sched.session_step()
+            clock[0] += 60
+        files = sorted(_sched.KEEP_OPEN_DIR.glob("*.jpg"))
+        assert len(files) == 1 and files[0].name.endswith("_nobug.jpg"), files
+        sched.last_shot -= sched.KEEP_OPEN_SHOT_EVERY          # 5 min later
+        _sched.KEEP_OPEN_KEEP, keep = 1, _sched.KEEP_OPEN_KEEP
+        try:
+            time.sleep(1.1)                                    # names are per second
+            sched.session_step()
+        finally:
+            _sched.KEEP_OPEN_KEEP = keep
+        files2 = sorted(_sched.KEEP_OPEN_DIR.glob("*.jpg"))
+        assert len(files2) == 1 and files2 != files            # oldest pruned
+    finally:
+        st.set("keep_open_until", None)
 
 
 if __name__ == "__main__":

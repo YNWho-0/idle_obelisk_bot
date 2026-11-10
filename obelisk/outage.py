@@ -91,6 +91,56 @@ def report_down(title: str, error: BaseException | str, state=None, now: float |
     return False
 
 
+FREEZE_RESTART_AFTER = 5 * 60    # frozen this long (several systemd retries): restart Waydroid
+FREEZE_RESTART_GAP = 6 * 3600    # frozen again within this of the last restart: it didn't help
+
+
+def screen_frozen(error: BaseException | str) -> bool:
+    """Device.capture() timed out even after nudging the desktop and retrying."""
+    text = str(error)
+    return text.startswith("timeout:") and "screencap" in text
+
+
+def restart_if_frozen(error: BaseException | str, state=None, now: float | None = None,
+                      start_restart=None, sender=None) -> bool:
+    """Android's screen froze (2026-11-09 08:54: every screencap hung for an
+    hour until the Pi was rebooted by hand; the health check said "RESTART
+    WAYDROID + BOT"). Once it has lasted FREEZE_RESTART_AFTER, start the
+    dashboard's Waydroid + bot restart. At most once per FREEZE_RESTART_GAP;
+    after that the normal outage path (reminders, give up) carries on.
+    Returns True if the restart was started (the caller then exits 0; the
+    restart script starts the bot again). Call after report_down()."""
+    if not screen_frozen(error):
+        return False
+    state = _state(state)
+    now = time.time() if now is None else now
+    o = state.get("outage") or {}
+    if not o or now - o.get("since", now) < FREEZE_RESTART_AFTER:
+        return False
+    last = state.get("freeze_restart_at")
+    if last is not None and now - last < FREEZE_RESTART_GAP:
+        log.info("Android's screen is frozen again %s after the last Waydroid restart; "
+                 "not restarting again", _fmt(now - last))
+        return False
+    if start_restart is None:
+        from .dashboard import start_restart
+    err = start_restart("all")
+    if err:
+        log.error("Android's screen is frozen, but the Waydroid restart couldn't start: %s", err)
+        return False
+    state.set("freeze_restart_at", now)
+    log.warning("Android's screen has been frozen for %s; restarting Waydroid and the bot",
+                _fmt(now - o["since"]))
+    kw = {"state": state, "force": True}
+    if sender is not None:
+        kw["sender"] = sender
+    _alert("freeze_restart", "Obelisk: restarting Waydroid",
+           f"Android's screen has been frozen for {_fmt(now - o['since'])}. The bot is "
+           "restarting Waydroid and itself; nothing to do unless another alert follows.",
+           tags="arrows_counterclockwise", **kw)
+    return True
+
+
 def report_up(state=None, now: float | None = None, sender=None) -> bool:
     """Call after a session completed normally. Sends "OK again" once per outage."""
     state = _state(state)

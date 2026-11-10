@@ -47,6 +47,11 @@ LATEST = Path(__file__).resolve().parent.parent / "logs" / "latest.jpg"
 # 20-21 of the ~24 expected (2026-11-06)
 FOUNDER_EMPTY_DIR = LATEST.parent / "founder_empty"
 FOUNDER_EMPTY_KEEP = 100
+# full frames every KEEP_OPEN_SHOT_EVERY in keep-open mode: on 2026-11-06 the
+# bot looted lootbugs for the first 33 min of a 6 h keep-open, then saw none
+# until the game was restarted; these show where they went
+KEEP_OPEN_DIR = LATEST.parent / "keep_open"
+KEEP_OPEN_KEEP = 200                # ~16 h at one every 5 min
 
 
 def save_latest(dev) -> None:
@@ -197,6 +202,23 @@ class Scheduler:
             self.last_shot = now
             State().set("last_session_at", now)
             save_latest(self.dev)
+            self.save_keep_open_frame()
+
+    def save_keep_open_frame(self) -> None:
+        """Keep this frame, named by whether the lootbug finder sees a bug in it."""
+        frame = self.last_frame
+        if frame is None or self.last_screen != screens.MINING:
+            return
+        try:
+            bug = screens.lootbug_sprite(frame) is not None
+            KEEP_OPEN_DIR.mkdir(parents=True, exist_ok=True)
+            path = KEEP_OPEN_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}_{'bug' if bug else 'nobug'}.jpg"
+            cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            for old in sorted(KEEP_OPEN_DIR.glob("*.jpg"))[:-KEEP_OPEN_KEEP]:
+                old.unlink()
+            log.info("keep-open: picture %s (lootbug seen: %s)", path.name, "yes" if bug else "no")
+        except OSError as e:
+            log.debug("could not save the keep-open frame: %s", e)
 
     def recover_keep_open(self) -> None:
         """Normal sessions recover from an unknown screen through their time limit

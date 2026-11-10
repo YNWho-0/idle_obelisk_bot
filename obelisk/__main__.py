@@ -213,7 +213,9 @@ def _report_down(title: str, e: Exception, dev) -> None:
     once it has lasted too long. Silent while still booting (bootcheck reports).
     Each alert carries a health picture saying whether to reboot the Pi."""
     from .bootcheck import uptime_s
-    from .outage import EXIT_GAVE_UP, report_down
+    from .outage import EXIT_GAVE_UP, report_down, restart_if_frozen
+    log = logging.getLogger("obelisk")
+    log.error("%s: %s: %s", title, type(e).__name__, e)     # the traceback only reaches the journal
     if uptime_s() < 600:
         return
     def health_picture():
@@ -221,8 +223,10 @@ def _report_down(title: str, e: Exception, dev) -> None:
         path, h = health_run(dev, copy_to_failures=True)
         return path, h.summary()
     if report_down(title, e, image_fn=health_picture):
-        logging.getLogger("obelisk").error("giving up: %s: %s", type(e).__name__, e)
+        log.error("giving up: %s: %s", type(e).__name__, e)
         sys.exit(EXIT_GAVE_UP)
+    if restart_if_frozen(e):
+        sys.exit(0)                  # the restart script stops and starts this service
 
 
 if __name__ == "__main__":

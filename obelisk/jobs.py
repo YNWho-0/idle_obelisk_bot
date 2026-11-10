@@ -366,6 +366,7 @@ class CloudSync:
     """
 
     name = "cloud"
+    LOAD_WAIT = 10.0          # s for the cloud info to load / a toast to pass
     UPLOAD_WAIT = 45.0        # s to see the cloud time change (usually ~3 s)
     LATE_UPLOAD_SLACK = 120   # s of play time either side of the Pi's when judging a late upload
 
@@ -389,10 +390,33 @@ class CloudSync:
         if frame is None:
             raise JobAborted("cloud: Cloud screen did not open", dev.capture())
         try:
+            frame = self._wait_loaded(dev, frame)
             result = self._decide(dev, frame, upload)
         finally:
             self._close(dev)
         return result
+
+    def _wait_loaded(self, dev, frame):
+        """A frame whose cloud play time is readable and not zero, or the last
+        one seen after LOAD_WAIT (then _decide skips the upload).
+
+        The Cloud screen can show before the game has fetched the cloud info:
+        on 2026-11-08 19:25 it read 00d 00h 00m 00s with no version, and the bot
+        raised a false conflict. A "Free bomb" toast across the cloud row made
+        it unreadable on 2026-11-08 16:55 and 2026-11-09 21:40 (no upload)."""
+        from .playtime import CLOUD_ROW, read_seconds
+
+        def loaded(f):
+            return screens.identify(f) == CLOUD and bool(read_seconds(f, CLOUD_ROW))
+
+        if loaded(frame):
+            return frame
+        got = wait_for(dev, loaded, timeout=self.LOAD_WAIT, interval=0.5)
+        if got is not None:
+            log.info("cloud: cloud info readable after a short wait")
+            return got
+        last = dev.capture()
+        return last if screens.identify(last) == CLOUD else frame
 
     def _conflict(self, frame, why: str) -> str:
         if not self.state.get("cloud_conflict"):
@@ -479,8 +503,8 @@ class CloudSync:
         if not window:
             return
         cloud_t = read_seconds(frame, CLOUD_ROW)
-        if cloud_t is None or cloud_t == self.state.get("cloud_last_upload"):
-            return                      # unreadable or nothing arrived: a later visit decides
+        if not cloud_t or cloud_t == self.state.get("cloud_last_upload"):
+            return                      # unreadable, not loaded or nothing arrived: a later visit decides
         if window[0] <= cloud_t <= window[1]:
             log.info("cloud: the unverified upload did arrive (cloud play time %ds)", cloud_t)
             self.state.set("cloud_last_upload", cloud_t)
@@ -517,6 +541,12 @@ class CloudSync:
         if cloud_t is None:
             log.warning("cloud: couldn't read the cloud play time; not uploading this session")
             save_failure(frame, "cloud_time_unreadable")
+            return "unreadable"
+        if cloud_t == 0:
+            # the game hadn't loaded the cloud info (00d 00h 00m 00s, no version):
+            # not another device's save, so no conflict; the next session looks again
+            log.warning("cloud: the cloud info didn't load; not uploading this session")
+            save_failure(frame, "cloud_not_loaded")
             return "unreadable"
         if last is None and not self.state.get("cloud_upload_allowed"):
             # e.g. state.json lost: without the record, the check that protects

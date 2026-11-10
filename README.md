@@ -113,6 +113,10 @@ normal session restarts it, checks the cloud and uploads. A phone save with more
 play time uploaded in the meantime wins as usual, so the Pi's progress from the
 mode is then lost. A cloud conflict cancels the mode.
 
+Every 5 min the mode keeps a full picture in `logs/keep_open/` (newest 200),
+named `_bug`/`_nobug` by whether the lootbug finder sees a bug in it: lootbugs
+stopped being found 33 min into a 6 h run on 2026-11-06.
+
 If the game sits off the mining screen for 5 min during the mode, the bot restarts
 it. After 3 restarts in a row that don't help, it ends the mode to save buffs and
 alerts the phone.
@@ -139,6 +143,11 @@ turns off again.
 
 **No record of the last upload** (e.g. `logs/state.json` lost): the bot can't run
 this check, so it reports a conflict rather than risk overwriting anything.
+
+**Cloud info not shown yet:** the bot waits up to 10 s for a readable, non-zero
+cloud play time (the game can show 00d 00h 00m 00s before it has fetched the
+cloud info, and toasts can cover the row). If it never shows, that session
+doesn't upload; it is never treated as a conflict.
 
 **Slow uploads:** an upload not confirmed within 45 s counts as a failure, but it
 may still arrive. If the next session finds a cloud time within 2 min of the Pi's
@@ -212,8 +221,11 @@ and is NOT restarted; check `logs/failures/` first. Crashes (adb, Waydroid
 down) retry every 60 s; after 2 h of failing it also exits with code 3.
 If screencap hangs, the bot first screenshots the Pi's own desktop (`grim`)
 to wake it: with no monitor attached, the desktop once stopped showing the
-game for 3 h until a VNC viewer connected. If the bot still gave up, connect
-with VNC, then `systemctl --user restart obelisk-bot`.
+game for 3 h until a VNC viewer connected. If screencap still hangs for 5 min
+(Android's screen frozen), the bot restarts Waydroid and itself, as the
+dashboard's Restart Waydroid + bot does, and alerts the phone; at most once
+per 6 h, after which the normal outage alerts carry on. If the bot still gave
+up, connect with VNC, then `systemctl --user restart obelisk-bot`.
 Every crash/outage alert carries a health picture (`obelisk/health.py`,
 also `venv/bin/python -m obelisk health` or the dashboard's "Check health
 now"): a banner saying NO REBOOT NEEDED / RESTART WAYDROID + BOT / REBOOT
