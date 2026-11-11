@@ -205,6 +205,8 @@ good session.
 * **Notification boxes**: in-game notices ("Elixir Drone is now Grade 6!") stay on
   the left over the stored-lootbug row until tapped; an interrupt taps them away
   on the mining screen (at most once a minute, 10 min pause if one won't close).
+  Each one is first saved, cropped to the box, in `logs/notifications/` (newest
+  1000); the dashboard's "Notifications today" card shows the day's.
 * **Lootbug skins**: in-game crops plus masked templates of all 14 skins
   (7 regular + 7 golden) from a wiki screenshot (`scripts/make_wiki_lootbugs.py`).
 

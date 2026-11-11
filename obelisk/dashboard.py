@@ -185,6 +185,8 @@ def collect() -> dict:
     events = [r for r in rows if "device: press" not in r[2] + r[3]
               and not r[3].startswith(("gem guard", "interrupt: offline"))][-40:]
     failures = sorted((p for p in (LOGS / "failures").glob("*.png")), reverse=True)
+    notifs = sorted((p.name for p in (LOGS / "notifications").glob(f"{today:%Y%m%d}-*.png")),
+                    reverse=True)
     reports = sorted((p.stem for p in (LOGS / "daily").glob("*.txt")), reverse=True)
     return {
         "now": dt.datetime.now(),
@@ -204,6 +206,7 @@ def collect() -> dict:
         "failures": [p.name for p in failures[:12]],
         "failures_today": sum(p.name.startswith(today.strftime("%Y%m%d")) for p in failures),
         "reports": reports,
+        "notifs": notifs,
         "paused_until": st.get("paused_until"),
         "session_now": st.get("session_now"),
         "keep_open": keep_left > 0,
@@ -268,6 +271,9 @@ font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 .gallery a{display:block;font-size:10px;color:var(--muted);word-break:break-all;text-decoration:none}
 .gallery img{width:100%;border-radius:6px;border:1px solid var(--line)}
+.notifs{display:flex;flex-direction:column;gap:10px}.notifs figure{margin:0}
+.notifs img{display:block;max-width:100%;image-rendering:pixelated;border-radius:6px}
+.notifs figcaption{color:var(--muted);font-size:12px;margin-top:2px}
 .ev{font:12px/1.5 ui-monospace,Menlo,monospace;overflow-x:auto;white-space:nowrap}
 .ev div{padding:1px 0}.ev .WARNING{color:var(--warn)}.ev .ERROR,.ev .CRITICAL{color:var(--bad)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px}.kv span:nth-child(odd){color:var(--muted)}
@@ -359,6 +365,13 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
   <div class="tile"><b>{{ d.failures_today }}</b><span>failure shots</span></div>
  </div>
  <p style="margin:10px 0 0"><a href="report/today">Today's full report →</a></p>
+</div>
+
+<div class="card" id="card-notifs" data-live><h2>Notifications today</h2>
+ {% if d.notifs %}<div class="notifs">{% for n in d.notifs %}<figure><a href="notif/{{ n }}"><img loading="lazy" src="notif/{{ n }}" alt="in-game notification"></a>
+  <figcaption>{{ n[9:11] }}:{{ n[11:13] }}:{{ n[13:15] }}</figcaption></figure>{% endfor %}</div>
+ <div class="sub" style="margin:8px 0 0">{{ d.notifs|length }} today, newest first · saved just before the bot tapped each one away</div>
+ {% else %}none yet today{% endif %}
 </div>
 
 <div class="card" id="card-gems" data-live><h2>Gems (48 h)</h2>{{ chart|safe if chart else 'not enough readings yet' }}</div>
@@ -543,6 +556,16 @@ def create_app() -> Flask:
             img = cv2.resize(img, (w, int(img.shape[0] * w / img.shape[1])), interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return Response(buf.tobytes(), mimetype="image/jpeg")
+
+    @app.get("/notif/<name>")
+    def notification(name):
+        if not SAFE_NAME.match(name):
+            abort(404)
+        p = LOGS / "notifications" / name
+        if not p.exists():
+            abort(404)
+        return Response(p.read_bytes(), mimetype="image/png",
+                        headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/report/<day>")
     def report(day):

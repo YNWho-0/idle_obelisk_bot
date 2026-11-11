@@ -21,6 +21,9 @@ from .screens import (A, CLOUD, CLOUD_AUTOSAVE, CLOUD_DOWNLOAD, CLOUD_TIME, CLOU
 log = logging.getLogger("obelisk.jobs")
 
 FAIL_DIR = Path(__file__).resolve().parent.parent / "logs" / "failures"
+# cropped notification boxes, saved before they are tapped away (dashboard card)
+NOTIF_DIR = FAIL_DIR.parent / "notifications"
+NOTIF_KEEP = 1000
 
 
 class JobAborted(RuntimeError):
@@ -679,7 +682,8 @@ class NotificationInterrupt:
     stored-lootbug row and part of the field (2026-11-10 00:44 in keep-open, a
     bug went unlooted for ~7 min behind "Elixir Drone is now Grade 6!").
     Verified by the box disappearing; backs off for 10 min if a press doesn't
-    dismiss it, so a box that won't go away is never pressed in a loop."""
+    dismiss it, so a box that won't go away is never pressed in a loop.
+    A crop of each box goes to logs/notifications/ first, for the dashboard."""
 
     MIN_GAP = 60
     BACKOFF = 600
@@ -687,6 +691,28 @@ class NotificationInterrupt:
 
     def __init__(self):
         self.next_ok = float("-inf")
+        self.last_crop: Optional[np.ndarray] = None
+
+    def save(self, frame: np.ndarray, box: tuple[int, int]) -> Optional[Path]:
+        """Keep a crop of the box for the dashboard, unless it is the same
+        notice as the last one saved (a box that wouldn't close, pressed again)."""
+        x0, y0, x1, y1 = screens.notification_crop(frame, box)
+        crop = frame[y0:y1, x0:x1]
+        last = self.last_crop
+        if last is not None and last.shape == crop.shape and \
+                np.abs(last.astype(int) - crop).mean() < 3:
+            return None
+        self.last_crop = crop.copy()
+        try:
+            NOTIF_DIR.mkdir(parents=True, exist_ok=True)
+            path = NOTIF_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}.png"
+            cv2.imwrite(str(path), crop)
+            for old in sorted(NOTIF_DIR.glob("*.png"))[:-NOTIF_KEEP]:
+                old.unlink()
+            return path
+        except OSError as e:
+            log.debug("could not save the notification picture: %s", e)
+            return None
 
     def handle(self, dev, frame: np.ndarray) -> bool:
         now = time.monotonic()
@@ -696,6 +722,7 @@ class NotificationInterrupt:
         if box is None:
             return False
         self.next_ok = now + self.MIN_GAP
+        self.save(frame, box)
         log.info("interrupt: dismissing a notification at y %d-%d", *box)
         dev.press(self.PRESS_X, (box[0] + box[1]) // 2)
         if wait_for(dev, lambda f: screens.notification_box(f) is None, timeout=3) is None:

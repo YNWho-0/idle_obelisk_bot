@@ -252,6 +252,28 @@ def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
     return None
 
 
+def notification_crop(frame: np.ndarray, box: tuple[int, int]) -> tuple[int, int, int, int]:
+    """(x0, y0, x1, y1) framing a notification box found by notification_box,
+    border and the icon tab on its right included (the Elixir one: x 0-297).
+    The right edge is where the fill stops: walking right from the checked
+    strip, the first run of GAP columns with little fill in the box's rows."""
+    GAP = 10
+    a, b = box
+    band = frame[a:b + 1].astype(int)
+    frac = (np.abs(band - NOTIF_FILL).max(axis=2) <= 8).mean(axis=0)
+    right, miss = NOTIF_STRIP[1], 0
+    for x in range(NOTIF_STRIP[1], min(frame.shape[1], 480)):
+        if frac[x] >= 0.25:
+            right, miss = x, 0
+        else:
+            miss += 1
+            if miss >= GAP:
+                break
+    # the found rows/columns stop inside the light border; on the Elixir box
+    # the dark outline is 4 px above, 2 below and 4 right of them (y 616-716, x <=296)
+    return (0, max(0, a - 4), min(frame.shape[1], right + 5), min(frame.shape[0], b + 3))
+
+
 def founder_crate(frame: np.ndarray) -> Optional[Match]:
     """Best match of the Founder drop crate (3 sway poses), or None."""
     if not right_size(frame):

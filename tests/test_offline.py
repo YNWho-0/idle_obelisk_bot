@@ -42,6 +42,7 @@ _sched.LATEST = _TMP / "latest.jpg"
 _sched.FOUNDER_EMPTY_DIR = _TMP / "founder_empty"
 _sched.KEEP_OPEN_DIR = _TMP / "keep_open"
 _jobs.FAIL_DIR = _TMP / "failures"
+_jobs.NOTIF_DIR = _TMP / "notifications"
 _gems.UNREAD_DIR = _TMP / "gem_unread"
 _gems.STABLE_WAIT = 0.05                           # unreadable frames don't wait the real 6 s
 _pt.UNREAD_DIR = _TMP / "playtime_unread"
@@ -846,7 +847,7 @@ def test_dashboard_updates_itself():
         c = app.test_client(); c.get("/?t=" + tok)
         page = c.get("/").get_data(as_text=True)
         ids = re.findall(r'id="([\w-]+)" data-live', page)
-        assert len(ids) == len(set(ids)) == 10 and "card-keep" in ids and "updated" in ids
+        assert len(ids) == len(set(ids)) == 11 and "card-keep" in ids and "updated" in ids
         assert "window.dashRefresh" in page and page.count('http-equiv="refresh"') == 1
         assert '<noscript><meta http-equiv="refresh"' in page  # only without JavaScript
     finally:
@@ -1703,6 +1704,43 @@ def test_notification_interrupt_presses_the_box_once_and_backs_off():
     it.next_ok -= it.MIN_GAP + 1                             # past the normal gap...
     assert not it.handle(dev, FRAMES["notif"]) and len(dev.presses) == 1   # ...but backed off
     assert not NotificationInterrupt().handle(dev, FRAMES["grid"])         # menus share the fill
+
+
+def test_notification_is_saved_cropped_once_before_the_press():
+    for old in _jobs.NOTIF_DIR.glob("*.png") if _jobs.NOTIF_DIR.exists() else []:
+        old.unlink()
+    f = FRAMES["notif"]
+    assert screens.notification_crop(f, screens.notification_box(f)) == (0, 616, 297, 717)
+    dev = FakeDevice("notif", {"notif": [(NOTIF_BOX, ["notif"])]})     # won't go away
+    it = NotificationInterrupt()
+    assert it.handle(dev, dev.capture())
+    saved = list(_jobs.NOTIF_DIR.glob("*.png"))
+    assert len(saved) == 1 and cv2.imread(str(saved[0])).shape == (101, 297, 3)
+    it.next_ok = float("-inf")                               # pressed again later:
+    assert it.handle(dev, dev.capture()) and len(list(_jobs.NOTIF_DIR.glob("*.png"))) == 1
+
+
+def test_dashboard_shows_todays_notifications_only():
+    import obelisk.dashboard as D
+    D.CONF = _TMP / "dash.conf"
+    logs, D.LOGS = D.LOGS, _TMP / "notif_dash"
+    try:
+        nd = D.LOGS / "notifications"
+        nd.mkdir(parents=True)
+        today = dt.date.today().strftime("%Y%m%d")
+        png = cv2.imencode(".png", FRAMES["notif"][616:717, 0:297])[1].tobytes()
+        for name in ("20200101-120000.png", f"{today}-004412.png", f"{today}-163015.png"):
+            (nd / name).write_bytes(png)
+        assert D.collect()["notifs"] == [f"{today}-163015.png", f"{today}-004412.png"]
+        app = D.create_app(); tok = D.ensure_conf()["token"]
+        c = app.test_client(); c.get("/?t=" + tok)
+        page = c.get("/").get_data(as_text=True)
+        assert "16:30:15" in page and "00:44:12" in page and "20200101" not in page
+        r = c.get(f"/notif/{today}-163015.png")
+        assert r.status_code == 200 and r.mimetype == "image/png" and r.data == png
+        assert c.get("/notif/..%2Fstate.json").status_code == 404
+    finally:
+        D.LOGS = logs
 
 
 if __name__ == "__main__":
