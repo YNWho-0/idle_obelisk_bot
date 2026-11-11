@@ -248,6 +248,10 @@ The dashboard updates itself every 5 s while it's open. Its Restart card does th
 same from a phone: restart the bot,
 restart Waydroid + game + bot (`scripts/restart_all.sh`, progress in
 `logs/restart.log`), or reboot the Pi.
+Its **Stats & graphs** page (link in the Today card) charts the last 7/14/30/60
+days from the logs: gems earned per day by source (the gem change around each
+claim, so spending doesn't count), the gem balance, founder crates per day,
+problems per day with the most common ones, and a table of the numbers.
 
 One-off commands (stop the service first):
 

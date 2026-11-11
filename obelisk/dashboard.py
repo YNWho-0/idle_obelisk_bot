@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 import secrets
 import subprocess
@@ -23,7 +24,9 @@ from pathlib import Path
 
 import cv2
 from flask import Flask, Response, abort, make_response, redirect, render_template_string, request
+from markupsafe import Markup, escape
 
+from . import stats as stats_mod
 from .summary import RE_LINE, summarize
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -244,11 +247,7 @@ def gem_svg(points, w=640, h=160) -> str:
 
 # ---------------------------------------------------------------- web
 
-PAGE = """<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<noscript><meta http-equiv="refresh" content="60"></noscript><title>Obelisk bot</title>
-<style>
-:root{--bg:#f6f6f4;--card:#fff;--fg:#1b1b1b;--muted:#6b6b6b;--line:#e3e3df;--accent:#2f6fde;
+BASE_CSS = """:root{--bg:#f6f6f4;--card:#fff;--fg:#1b1b1b;--muted:#6b6b6b;--line:#e3e3df;--accent:#2f6fde;
 --ok:#1f8a4c;--warn:#b7791f;--bad:#c0392b}
 @media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#1e1e1e;--fg:#ececec;--muted:#9a9a9a;
 --line:#2c2c2c;--accent:#6ea0ff;--ok:#4cc380;--warn:#e0a84a;--bad:#ef6b5e}}
@@ -285,7 +284,13 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
 .ctl button.stop:not(:disabled){border-color:var(--bad);color:var(--bad);font-weight:600}
 .slider{display:flex;justify-content:space-between;margin:10px 0 0}
 input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
-</style></head><body><main>
+"""
+
+PAGE = """<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<noscript><meta http-equiv="refresh" content="60"></noscript><title>Obelisk bot</title>
+<style>
+""" + BASE_CSS + """</style></head><body><main>
 <h1>Idle Obelisk bot</h1>
 <div class="sub"><span id="updated" data-live>updated {{ d.now.strftime('%a %H:%M:%S') }}</span> · <span id="live">live</span></div>
 
@@ -364,7 +369,7 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
   <div class="tile"><b>{{ '%.1f' % d.online_today_min }}</b><span>min in front</span></div>
   <div class="tile"><b>{{ d.failures_today }}</b><span>failure shots</span></div>
  </div>
- <p style="margin:10px 0 0"><a href="report/today">Today's full report →</a></p>
+ <p style="margin:10px 0 0"><a href="report/today">Today's full report →</a> · <a href="stats">Stats &amp; graphs →</a></p>
 </div>
 
 <div class="card" id="card-notifs" data-live><h2>Notifications today</h2>
@@ -454,6 +459,260 @@ input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--acc
 })();
 </script>
 </main></body></html>"""
+
+# ---------------------------------------------------------------- stats page charts
+# Plain HTML/CSS columns (text stays at its real size on a phone) and an SVG
+# line stretched to its box, with HTML labels; JS adds the hover tooltips.
+
+STAT_DAYS = (7, 14, 30, 60)          # obelisk.log* is kept 60 days
+
+
+def nice_ticks(lo: float, hi: float, n: int = 4) -> list[float]:
+    """Round tick values covering lo..hi, about n intervals."""
+    if hi <= lo:
+        hi = lo + 1
+    raw = (hi - lo) / n
+    mag = 10 ** math.floor(math.log10(raw))
+    step = max(1, next(m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw))   # counts: whole numbers
+    start = math.floor(lo / step) * step
+    ticks = [start]
+    while ticks[-1] < hi:
+        ticks.append(ticks[-1] + step)
+    return ticks
+
+
+def fmt_num(v: float) -> str:
+    return f"{v / 1000:g}K" if abs(v) >= 10000 else f"{v:,.0f}"
+
+
+def _grid(ticks: list[float]) -> str:
+    lo, hi = ticks[0], ticks[-1]
+    return "".join(f'<div class="gl" style="bottom:{(t - lo) / (hi - lo) * 100:.2f}%">'
+                   f'<span>{fmt_num(t)}</span></div>' for t in ticks)
+
+
+def _xlabels(dates: list[dt.date]) -> str:
+    every = 1 if len(dates) <= 10 else 2 if len(dates) <= 16 else 5 if len(dates) <= 31 else 10
+    last = len(dates) - 1
+    out = []
+    for i, d in enumerate(dates):
+        show = (last - i) % every == 0
+        txt = f"{d:%b} {d.day}" if show and (i == last or d.day == 1 or i < every) else str(d.day)
+        out.append(f"<span>{txt if show else ''}</span>")
+    return f'<div class="xl">{"".join(out)}</div>'
+
+
+def columns_html(days: list, series: list[tuple[str, str, str]], value, unit: str,
+                 height: int = 150) -> Markup:
+    """Stacked columns, one per day. series = [(key, label, css color)];
+    value(day, key) -> number. Each column's tooltip lists its parts."""
+    totals = [sum(value(d, k) for k, _, _ in series) for d in days]
+    ticks = nice_ticks(0, max(totals + [1]))
+    cols = []
+    for d, total in zip(days, totals):
+        head = f"{d.date:%a %b} {d.date.day}"
+        if not d.lines:
+            tip = f"{head}\nbot not running"
+        elif len(series) == 1:
+            tip = f"{head}\n{total:,} {unit}"
+        else:
+            tip = f"{head} · {total:,} {unit}\n" + "\n".join(
+                f"{label}: {value(d, k):,}" for k, label, _ in series)
+        segs = "".join(f'<div style="flex:{value(d, k)} 0 0;background:{color}"></div>'
+                       for k, _, color in series if value(d, k) > 0)
+        stack = (f'<div class="stack" style="height:{total / ticks[-1] * 100:.2f}%">{segs}</div>'
+                 if total else "")
+        cols.append(f'<div class="col" tabindex="0" data-tip="{escape(tip)}">{stack}</div>')
+    return Markup(f'<div class="cc" style="height:{height}px">{_grid(ticks)}'
+                  f'<div class="cols">{"".join(cols)}</div></div>'
+                  + _xlabels([d.date for d in days]))
+
+
+def legend_html(series: list[tuple[str, str, str]]) -> Markup:
+    return Markup('<div class="legend">' + "".join(
+        f'<span><i style="background:{c}"></i>{escape(label)}</span>' for _, label, c in series)
+        + "</div>")
+
+
+def line_html(points: list[tuple[dt.datetime, int]], start: dt.datetime, end: dt.datetime,
+              height: int = 150, max_points: int = 400) -> Markup:
+    """Gem balance over the period: a line with a light wash under it."""
+    if len(points) < 2:
+        return Markup('<p class="sub">not enough gem readings in this period</p>')
+    if len(points) > max_points:                    # keep the shape, drop density
+        step = len(points) / max_points
+        points = [points[int(i * step)] for i in range(max_points)] + [points[-1]]
+    vals = [v for _, v in points]
+    ticks = nice_ticks(min(vals), max(vals))
+    lo, hi = ticks[0], ticks[-1]
+    span = max((end - start).total_seconds(), 1)
+    xy = [((t - start).total_seconds() / span, (v - lo) / (hi - lo)) for t, v in points]
+    line = " ".join(f"{x * 1000:.1f},{(1 - y) * 1000:.1f}" for x, y in xy)
+    area = f"{xy[0][0] * 1000:.1f},1000 {line} {xy[-1][0] * 1000:.1f},1000"
+    data = json.dumps([[round(x, 5), round(y, 5), f"{t:%a %b} {t.day} {t:%H:%M} · {v:,} gems"]
+                       for (x, y), (t, v) in zip(xy, points)])
+    lx, ly = xy[-1]
+    return Markup(
+        f'<div class="lc" style="height:{height}px" data-pts="{escape(data)}">{_grid(ticks)}'
+        f'<svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">'
+        f'<polygon points="{area}" class="area"/>'
+        f'<polyline points="{line}" vector-effect="non-scaling-stroke"/></svg>'
+        f'<div class="dot" style="left:{lx * 100:.2f}%;bottom:{ly * 100:.2f}%"></div>'
+        f'<div class="xh" hidden></div><div class="dot hov" hidden></div></div>'
+        f'<div class="xl ends"><span>{start:%b} {start.day}</span><span>now · {vals[-1]:,}</span></div>')
+
+
+SERIES_GEMS = [("freebie", "freebies", "var(--s1)"), ("founder", "founder crates", "var(--s2)"),
+               ("lootbug", "lootbugs", "var(--s3)")]
+SERIES_PROBLEMS = [("warnings", "warnings", "var(--warn)"), ("errors", "errors", "var(--bad)")]
+
+
+def stats_view(n_days: int, today: dt.date | None = None) -> dict:
+    s = stats_mod.collect(n_days, today=today, log_dir=LOGS)
+    active = max(s.active_days, 1)
+    first = dt.datetime.combine(s.days[0].date, dt.time())
+    return {
+        "n": n_days, "s": s, "active": s.active_days,
+        "earned": s.total("earned"), "per_day": s.total("earned") / active,
+        "founder": s.job("founder claimed"), "freebie": s.job("freebie claimed"),
+        "lootbug": s.job("lootbug looted"), "problems": s.total("problems"),
+        "gems_chart": columns_html(s.days, SERIES_GEMS, lambda d, k: d.gems[k], "gems"),
+        "gems_legend": legend_html(SERIES_GEMS),
+        "balance_chart": line_html(s.balance, first, dt.datetime.now()),
+        "founder_chart": columns_html(s.days, [("f", "founder crates", "var(--s2)")],
+                                      lambda d, k: d.jobs["founder claimed"], "founder crates"),
+        "problems_chart": columns_html(s.days, SERIES_PROBLEMS,
+                                       lambda d, k: getattr(d, k), "problems"),
+        "problems_legend": legend_html(SERIES_PROBLEMS),
+    }
+
+
+STATS_CSS = """
+.viz{--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--grid:#ecebe7}
+@media (prefers-color-scheme:dark){.viz{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--grid:#2b2b2b}}
+.period{display:flex;gap:6px;margin:0 0 4px}
+.period a{padding:6px 12px;border-radius:9px;border:1px solid var(--line);text-decoration:none;color:var(--fg);font-size:14px}
+.period a.on{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);margin:0 0 6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.cc,.lc{position:relative;margin:10px 0 0 40px}
+.gl{position:absolute;left:0;right:0;border-top:1px solid var(--grid)}
+.gl span{position:absolute;right:100%;margin-right:6px;transform:translateY(-50%);font-size:11px;
+color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.cols{position:absolute;inset:0;display:flex;align-items:flex-end}
+.col{flex:1;height:100%;display:flex;align-items:flex-end;justify-content:center;outline:none}
+.stack{width:min(24px,70%);display:flex;flex-direction:column-reverse;gap:2px;border-radius:4px 4px 0 0;overflow:hidden}
+.stack div{min-height:2px}
+.cols:hover .col:not(:hover) .stack,.cols.tapped .col:not(.on) .stack{opacity:.45}
+.col:focus-visible .stack{outline:2px solid var(--accent);outline-offset:2px}
+.xl{display:flex;margin:5px 0 0 40px;font-size:11px;color:var(--muted)}
+.xl span{flex:1;text-align:center;white-space:nowrap;width:0;display:flex;justify-content:center}
+.xl.ends{justify-content:space-between}.xl.ends span{flex:none;width:auto}
+.lc svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.lc polyline{fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.lc .area{fill:var(--s1);opacity:.1}
+.lc .dot{position:absolute;width:10px;height:10px;margin:0 0 -5px -5px;border-radius:50%;background:var(--s1);
+box-shadow:0 0 0 2px var(--card)}
+.lc .xh{position:absolute;top:0;bottom:0;border-left:1px solid var(--muted)}
+#tip{position:absolute;z-index:9;pointer-events:none;background:var(--fg);color:var(--bg);font-size:12px;
+line-height:1.45;padding:6px 9px;border-radius:8px;white-space:pre-line;width:max-content;max-width:240px}
+.issues{margin:12px 0 0;padding:0;list-style:none;font-size:13px}
+.issues li{display:flex;gap:10px;padding:5px 0;border-top:1px solid var(--line)}
+.issues li span:first-child{flex:1;min-width:0;overflow-wrap:anywhere}
+.issues b{font-variant-numeric:tabular-nums}
+.tbl{overflow-x:auto;margin-top:8px}
+.tbl table{border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl th,.tbl td{padding:4px 8px;text-align:right;border-bottom:1px solid var(--line)}
+.tbl th:first-child,.tbl td:first-child{text-align:left}.tbl th{color:var(--muted);font-weight:600}
+summary{cursor:pointer;color:var(--accent)}
+"""
+
+STATS_PAGE = """<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Obelisk bot stats</title><style>""" + BASE_CSS + STATS_CSS + """</style></head><body><main class="viz">
+<p style="margin:0"><a href="./">← dashboard</a></p>
+<h1>Stats</h1>
+<div class="sub">last {{ v.n }} days · the bot ran on {{ v.active }} of them · hover or tap a chart for numbers</div>
+<nav class="period">{% for n in days_opts %}<a href="?days={{ n }}" class="{{ 'on' if n == v.n }}">{{ n }} days</a>{% endfor %}</nav>
+
+<div class="card"><div class="tiles">
+ <div class="tile"><b>{{ '{:,}'.format(v.earned) }}</b><span>gems earned</span></div>
+ <div class="tile"><b>{{ '{:,.0f}'.format(v.per_day) }}</b><span>avg gems a day</span></div>
+ <div class="tile"><b>{{ v.founder }}</b><span>founder crates</span></div>
+ <div class="tile"><b>{{ v.freebie }}</b><span>freebie claims</span></div>
+ <div class="tile"><b>{{ v.lootbug }}</b><span>lootbug loots</span></div>
+ <div class="tile"><b>{{ v.problems }}</b><span>problems logged</span></div>
+</div></div>
+
+<div class="card"><h2>Gems earned per day</h2>{{ v.gems_legend }}{{ v.gems_chart }}
+ <div class="sub" style="margin:8px 0 0">What each claim added, read before and after it. Spending and cloud downloads don't count.</div></div>
+
+<div class="card"><h2>Gem balance</h2>{{ v.balance_chart }}
+ <div class="sub" style="margin:8px 0 0">Drops are gems spent, or a save loaded from another device.</div></div>
+
+<div class="card"><h2>Founder crates per day</h2>{{ v.founder_chart }}</div>
+
+<div class="card"><h2>Problems per day</h2>{{ v.problems_legend }}{{ v.problems_chart }}
+ {% if v.s.issues %}<ul class="issues">{% for msg, n in v.s.issues %}<li><span>{{ msg }}</span><b>{{ n }}×</b></li>{% endfor %}</ul>{% endif %}</div>
+
+<div class="card"><details><summary>Show the numbers as a table</summary><div class="tbl"><table>
+ <tr><th>Day</th><th>Gems</th><th>Freebie</th><th>Founder</th><th>Lootbug</th><th>Crates</th><th>Freebies</th><th>Loots</th><th>Sessions</th><th>Min in front</th><th>Problems</th></tr>
+ {% for d in v.s.days|reverse %}<tr><td>{{ d.date.strftime('%a %b %d') }}</td>{% if d.lines %}<td>{{ '{:,}'.format(d.earned) }}</td>
+  <td>{{ d.gems['freebie'] }}</td><td>{{ d.gems['founder'] }}</td><td>{{ d.gems['lootbug'] }}</td>
+  <td>{{ d.jobs['founder claimed'] }}</td><td>{{ d.jobs['freebie claimed'] }}</td><td>{{ d.jobs['lootbug looted'] }}</td>
+  <td>{{ d.sessions }}</td><td>{{ d.online // 60 }}</td><td>{{ d.problems }}</td>{% else %}<td colspan="10" style="text-align:left;color:var(--muted)">bot not running</td>{% endif %}</tr>{% endfor %}
+</table></div></details></div>
+<div id="tip" hidden></div>
+<script>
+(function () {
+  var tip = document.getElementById("tip"), on = null;
+  function place(text, x, y) {
+    tip.textContent = text; tip.hidden = false;
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(x - w / 2, document.documentElement.clientWidth - w - 8)) + "px";
+    tip.style.top = (y + window.scrollY - h - 10) + "px";
+  }
+  function clear() {
+    tip.hidden = true;
+    if (on) { on.classList.remove("on"); on.parentNode.classList.remove("tapped"); on = null; }
+    document.querySelectorAll(".lc .xh,.lc .hov").forEach(function (e) { e.hidden = true; });
+  }
+  function column(c, touch) {
+    clear(); on = c; c.classList.add("on");
+    if (touch) c.parentNode.classList.add("tapped");
+    var r = (c.querySelector(".stack") || c).getBoundingClientRect();
+    place(c.dataset.tip, r.left + r.width / 2, c.querySelector(".stack") ? r.top : r.bottom);
+  }
+  function line(lc, ev) {
+    var pts = lc._pts || (lc._pts = JSON.parse(lc.dataset.pts)), r = lc.getBoundingClientRect();
+    var f = (ev.clientX - r.left) / r.width, best = pts[0];
+    pts.forEach(function (p) { if (Math.abs(p[0] - f) < Math.abs(best[0] - f)) best = p; });
+    var xh = lc.querySelector(".xh"), d = lc.querySelector(".hov");
+    xh.hidden = d.hidden = false;
+    xh.style.left = d.style.left = best[0] * 100 + "%"; d.style.bottom = best[1] * 100 + "%";
+    place(best[2], r.left + best[0] * r.width, r.bottom - best[1] * r.height);
+  }
+  document.addEventListener("pointerover", function (e) {
+    var c = e.target.closest(".col");
+    if (c && c !== on) column(c, e.pointerType === "touch");
+  });
+  document.addEventListener("focusin", function (e) { if (e.target.matches(".col")) column(e.target); });
+  document.addEventListener("pointermove", function (e) {
+    var lc = e.target.closest(".lc");
+    if (lc) line(lc, e);
+  });
+  document.addEventListener("pointerdown", function (e) {
+    var lc = e.target.closest(".lc");
+    if (lc) line(lc, e); else if (!e.target.closest(".col")) clear();
+  });
+  document.addEventListener("pointerout", function (e) {
+    if (e.pointerType === "touch") return;          // a tap keeps its tooltip until the next tap
+    if (!e.relatedTarget || !e.relatedTarget.closest || !e.relatedTarget.closest(".col,.lc")) clear();
+  });
+})();
+</script>
+</main></body></html>"""
+
 
 REPORT = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Report {{ day }}</title>
@@ -556,6 +815,13 @@ def create_app() -> Flask:
             img = cv2.resize(img, (w, int(img.shape[0] * w / img.shape[1])), interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return Response(buf.tobytes(), mimetype="image/jpeg")
+
+    @app.get("/stats")
+    def stats():
+        n = request.args.get("days", 14, type=int)
+        if n not in STAT_DAYS:
+            n = 14
+        return render_template_string(STATS_PAGE, v=stats_view(n), days_opts=STAT_DAYS)
 
     @app.get("/notif/<name>")
     def notification(name):

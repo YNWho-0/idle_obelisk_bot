@@ -1743,6 +1743,77 @@ def test_dashboard_shows_todays_notifications_only():
         D.LOGS = logs
 
 
+STATS_LOG = """\
+2026-11-09 23:50:00,000 INFO    obelisk.scheduler: job freebie -> claimed
+2026-11-09 23:50:01,000 INFO    obelisk.scheduler: gem guard: 100 -> 170 ok
+2026-11-10 00:10:00,000 INFO    obelisk.scheduler: session start
+2026-11-10 00:10:05,000 INFO    obelisk.scheduler: job founder -> claimed
+2026-11-10 00:10:06,000 INFO    obelisk.scheduler: gem guard: 170 -> 190 ok
+2026-11-10 00:10:07,000 INFO    obelisk.health: health: NO REBOOT NEEDED - all checks OK.
+2026-11-10 00:10:08,000 INFO    obelisk.scheduler: job lootbug -> looted
+2026-11-10 00:10:09,000 INFO    obelisk.scheduler: gem guard: couldn't read the gem count
+2026-11-10 00:10:10,000 INFO    obelisk.scheduler: gem guard: 50 -> 50 ok
+2026-11-10 00:10:11,000 INFO    obelisk.scheduler: job freebie -> claimed
+2026-11-10 00:10:12,000 INFO    obelisk.scheduler: gem guard: 50 -> 130 ok
+2026-11-10 00:10:13,000 WARNING obelisk.device: screencap timed out; nudging the host display and retrying
+2026-11-10 00:10:14,000 WARNING obelisk.jobs: saved failure screenshot /x/logs/failures/20261110-001014_a.png
+2026-11-10 00:10:15,000 ERROR   obelisk.scheduler: game (re)started but no known screen within 90 s
+2026-11-10 00:10:16,000 INFO    obelisk.jobs: interrupt: dismissing a notification at y 616-716
+2026-11-10 00:10:20,000 INFO    obelisk.scheduler: session end: 20 s online; next session 01:00:00
+2026-11-10 00:20:13,000 WARNING obelisk.device: screencap timed out; nudging the host display and retrying
+"""
+
+
+def _stats_logs(today: dt.date = dt.date(2026, 11, 10)) -> Path:
+    """STATS_LOG as a rotated file + the current one, its two days moved to
+    today - 1 and today."""
+    d = _TMP / f"stats_logs_{today}"
+    d.mkdir(exist_ok=True)
+    y = (today - dt.timedelta(days=1)).isoformat()
+    log = STATS_LOG.replace("2026-11-09", "Y").replace("2026-11-10", today.isoformat()).replace("Y", y)
+    old, cur = log.split(today.isoformat(), 1)
+    (d / f"obelisk.log.{y}").write_text(old)
+    (d / "obelisk.log").write_text(today.isoformat() + cur)
+    return d
+
+
+def test_stats_attribute_gems_to_the_job_before_each_reading():
+    import obelisk.stats as S
+    d = _stats_logs()
+    s = S.collect(2, today=dt.date(2026, 11, 10), log_dir=d)
+    y, t = s.days
+    assert (y.date, y.gems["freebie"], y.earned) == (dt.date(2026, 11, 9), 70, 70)
+    # the drop 190 -> 50 between jobs (spent on the phone) is not counted; the
+    # unreadable reading leaves the lootbug job with nothing to claim
+    assert t.gems == {"founder": 20, "freebie": 80} and t.earned == 100
+    assert (t.jobs["founder claimed"], t.jobs["lootbug looted"], t.jobs["freebie claimed"]) == (1, 1, 1)
+    assert (t.sessions, t.online, t.warnings, t.errors, t.notifications) == (1, 20, 3, 1, 1)
+    assert [v for _, v in s.balance] == [170, 190, 50, 130]
+    assert s.issues[0] == ("screencap timed out; nudging the host display and retrying", 2)
+    assert all("failure screenshot" not in k for k, _ in s.issues)
+    assert s.active_days == 2 and s.job("freebie claimed") == 2
+    assert [x.date for x in S.collect(5, today=dt.date(2026, 11, 10), log_dir=d).days][0] == dt.date(2026, 11, 6)
+
+
+def test_dashboard_stats_page():
+    import obelisk.dashboard as D
+    assert D.nice_ticks(0, 5730) == [0, 2000, 4000, 6000]
+    assert D.nice_ticks(0, 1) == [0, 1] and D.nice_ticks(37, 5995)[0] == 0
+    D.CONF = _TMP / "dash.conf"
+    logs, D.LOGS = D.LOGS, _stats_logs(dt.date.today())
+    try:
+        app = D.create_app(); tok = D.ensure_conf()["token"]
+        c = app.test_client(); c.get("/?t=" + tok)
+        assert 'href="stats"' in c.get("/").get_data(as_text=True)    # one link from the dashboard
+        page = c.get("/stats?days=7").get_data(as_text=True)
+        assert page.count('class="col"') == 3 * 7                    # 3 column charts x 7 days
+        assert 'class="on">7 days' in page and "data-pts=" in page
+        assert c.get("/stats?days=999").status_code == 200             # falls back to 14
+        assert "bot not running" in page
+    finally:
+        D.LOGS = logs
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
