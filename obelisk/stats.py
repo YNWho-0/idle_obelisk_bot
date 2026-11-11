@@ -95,9 +95,17 @@ def _parse(path: Path) -> list:
     return rows
 
 
+# warnings that aren't problems: not counted or listed
+NOT_PROBLEMS = (
+    "saved failure screenshot",                  # always follows another problem
+    "cloud: another device's save has more play time",   # loading your newer phone save
+)
+
+
 def issue_key(msg: str) -> str | None:
-    """A warning/error with its numbers and paths blanked, so repeats group."""
-    if msg.startswith("saved failure screenshot"):       # always follows another problem
+    """A warning/error with its numbers and paths blanked, so repeats group;
+    None for one that isn't a problem."""
+    if msg.startswith(NOT_PROBLEMS):
         return None
     return RE_NUM.sub("#", RE_PATH.sub("…", msg))[:110]
 

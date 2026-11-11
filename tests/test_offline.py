@@ -1792,6 +1792,7 @@ STATS_LOG = """\
 2026-11-10 00:10:15,000 ERROR   obelisk.scheduler: game (re)started but no known screen within 90 s
 2026-11-10 00:10:16,000 INFO    obelisk.jobs: interrupt: dismissing a notification at y 616-716
 2026-11-10 00:10:20,000 INFO    obelisk.scheduler: session end: 20 s online; next session 01:00:00
+2026-11-10 00:15:00,000 WARNING obelisk.jobs: cloud: another device's save has more play time (614486s): downloading it
 2026-11-10 00:20:13,000 WARNING obelisk.device: screencap timed out; nudging the host display and retrying
 2026-11-10 01:30:00,000 WARNING obelisk.device: screencap timed out; nudging the host display and retrying
 """
@@ -1822,11 +1823,12 @@ def test_stats_attribute_gems_to_the_job_before_each_reading():
     assert (t.jobs["founder claimed"], t.jobs["lootbug looted"], t.jobs["freebie claimed"]) == (1, 1, 1)
     # the screencap warning at 00:20 repeats the 00:10 one (one episode), 01:30
     # is over an hour later (a new one); the failure-screenshot line always
-    # follows another problem: not counted
+    # follows another problem and loading the phone's newer save is normal:
+    # neither counted
     assert (t.sessions, t.online, t.warnings, t.errors, t.notifications) == (1, 20, 2, 1, 1)
     assert [v for _, v in s.balance] == [170, 190, 50, 130]
     assert s.issues[0] == ("screencap timed out; nudging the host display and retrying", 2, 3)
-    assert all("failure screenshot" not in k for k, _, _ in s.issues)
+    assert all("failure screenshot" not in k and "another device" not in k for k, _, _ in s.issues)
     assert s.active_days == 2 and s.job("freebie claimed") == 2
     assert [x.date for x in S.collect(5, today=dt.date(2026, 11, 10), log_dir=d).days][0] == dt.date(2026, 11, 6)
 
