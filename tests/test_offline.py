@@ -29,7 +29,7 @@ import obelisk.jobs as _jobs                       # noqa: E402
 import obelisk.playtime as _pt                     # noqa: E402
 from obelisk import screens                        # noqa: E402
 from obelisk.jobs import (CloudSync, FounderJob, FreebieJob, JobAborted,  # noqa: E402
-                          AnrInterrupt, LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt,
+                          AnrInterrupt, LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt, NotificationInterrupt,
                           OfflineGainsInterrupt)
 from obelisk.logfile import SharedDailyLog         # noqa: E402
 from obelisk.scheduler import Scheduler           # noqa: E402
@@ -106,6 +106,7 @@ F = {
     "hud_tap_again": "n113_hud_tap_again.png",  # after ONE tap: "Tap again to loot all"
     "lootall_5": "n114_lootall_5.png",          # Loot-All after the double tap: 5 looted
     "after_lootall": "n115_after_lootall.png",  # row and field bug both gone
+    "notif": "n116_notification_elixir.png",    # keep-open 00:44: "Elixir Drone is now Grade 6!" box
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -1677,6 +1678,31 @@ def test_freebie_gap_in_keep_open_mode():
     assert not job.due(now, FRAMES["store_full"])
     job.last_run = now - 90
     assert job.due(now, FRAMES["store_full"])                       # shown full: claim now
+
+
+# ---------------------------------------------------------------- notification box
+
+NOTIF_BOX = (130, 620, 234, 714)
+
+
+def test_notification_box_found_only_on_the_real_box():
+    assert screens.notification_box(FRAMES["notif"]) == (620, 714)
+    for k in ("hud_stored_1", "hud_stored_2", "after_lootall", "crate_gone", "mining_bugs",
+              "mining_1bug", "store_closed", "no_bugs", "store_full", "after_offline"):
+        assert screens.notification_box(FRAMES[k]) is None, k
+
+
+def test_notification_interrupt_presses_the_box_once_and_backs_off():
+    dev = FakeDevice("notif", {"notif": [(NOTIF_BOX, ["after_lootall"])]})
+    it = NotificationInterrupt()
+    assert it.handle(dev, dev.capture()) and [p[0] for p in dev.presses] == ["notif"]
+    assert not it.handle(dev, FRAMES["notif"])               # within MIN_GAP: leave it
+    dev = FakeDevice("notif", {"notif": [(NOTIF_BOX, ["notif"])]})   # won't go away
+    it = NotificationInterrupt()
+    assert it.handle(dev, dev.capture())
+    it.next_ok -= it.MIN_GAP + 1                             # past the normal gap...
+    assert not it.handle(dev, FRAMES["notif"]) and len(dev.presses) == 1   # ...but backed off
+    assert not NotificationInterrupt().handle(dev, FRAMES["grid"])         # menus share the fill
 
 
 if __name__ == "__main__":

@@ -674,6 +674,37 @@ def _center(box) -> tuple[int, int]:
     return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
 
 
+class NotificationInterrupt:
+    """Dismiss a left-side notification box by pressing it: it covers the
+    stored-lootbug row and part of the field (2026-11-10 00:44 in keep-open, a
+    bug went unlooted for ~7 min behind "Elixir Drone is now Grade 6!").
+    Verified by the box disappearing; backs off for 10 min if a press doesn't
+    dismiss it, so a box that won't go away is never pressed in a loop."""
+
+    MIN_GAP = 60
+    BACKOFF = 600
+    PRESS_X = 180            # inside the box, right of the timer rows it covers
+
+    def __init__(self):
+        self.next_ok = float("-inf")
+
+    def handle(self, dev, frame: np.ndarray) -> bool:
+        now = time.monotonic()
+        if now < self.next_ok or screens.identify(frame) != MINING:
+            return False
+        box = screens.notification_box(frame)
+        if box is None:
+            return False
+        self.next_ok = now + self.MIN_GAP
+        log.info("interrupt: dismissing a notification at y %d-%d", *box)
+        dev.press(self.PRESS_X, (box[0] + box[1]) // 2)
+        if wait_for(dev, lambda f: screens.notification_box(f) is None, timeout=3) is None:
+            log.warning("notification still shown after the press; leaving it for %d min",
+                        self.BACKOFF // 60)
+            self.next_ok = now + self.BACKOFF
+        return True
+
+
 class MenuCloseInterrupt:
     """Safety net: if the screen sits on one of the bot's own menus (Store,
     grid menu, Cloud) for AFTER consecutive polls, e.g. after an aborted job,

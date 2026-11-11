@@ -202,6 +202,9 @@ good session.
   one seen and alerts the phone if it changed, since updates can move buttons.
 * **Founder diagnostics**: a session with no crate saves its last frame to
   `logs/founder_empty/` (newest 100), to find crates the bot doesn't recognise.
+* **Notification boxes**: in-game notices ("Elixir Drone is now Grade 6!") stay on
+  the left over the stored-lootbug row until tapped; an interrupt taps them away
+  on the mining screen (at most once a minute, 10 min pause if one won't close).
 * **Lootbug skins**: in-game crops plus masked templates of all 14 skins
   (7 regular + 7 golden) from a wiki screenshot (`scripts/make_wiki_lootbugs.py`).
 

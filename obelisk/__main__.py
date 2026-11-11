@@ -22,7 +22,7 @@ import cv2
 from . import screens
 from .device import Device
 from .jobs import (CloudSync, FounderJob, FreebieJob, JobAborted, LootbugJob, LootbugPopupInterrupt,
-                   AnrInterrupt, MenuCloseInterrupt,
+                   AnrInterrupt, MenuCloseInterrupt, NotificationInterrupt,
                    OfflineGainsInterrupt, save_failure)
 from .logfile import SharedDailyLog
 from .session import SessionPlanner
@@ -200,7 +200,8 @@ def main() -> None:
             "mode: %s", "always open" if planner is None else "a short session every 50 min, game in background between")
         try:
             Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
-                      interrupts=[AnrInterrupt(), OfflineGainsInterrupt(), LootbugPopupInterrupt(), MenuCloseInterrupt()],
+                      interrupts=[AnrInterrupt(), OfflineGainsInterrupt(), LootbugPopupInterrupt(),
+                                  MenuCloseInterrupt(), NotificationInterrupt()],
                       poll=3.0, planner=planner,
                       cloud=None if planner is None else CloudSync()).run_forever()
         except Exception as e:

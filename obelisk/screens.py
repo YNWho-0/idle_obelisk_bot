@@ -221,6 +221,37 @@ def lootbug_stored(frame: np.ndarray) -> Optional[Match]:
     return A.get("lootbug_stored").find(frame)
 
 
+# Left-side notification box ("Elixir Drone is now Grade 6!" etc.): a flat dark
+# box (BGR 24,20,16) over the timer list, reaching x~234 and ~95 px tall. It hid
+# both the stored-lootbug row and the bug on the field in keep-open mode
+# (2026-11-10 00:44). The timer rows use the same fill but end at x~122, so only
+# x 130-225 is checked. On 64 saved mining frames (dark space floors included)
+# it matched only that box; menus share the fill, so callers check MINING first.
+NOTIF_FILL = np.array([24, 20, 16])
+NOTIF_STRIP = (130, 226)
+NOTIF_ROWS = (250, 1090)
+
+
+def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
+    """(y_top, y_bottom) of a left-side notification box, or None."""
+    if not right_size(frame):
+        return None
+    strip = frame[NOTIF_ROWS[0]:NOTIF_ROWS[1], NOTIF_STRIP[0]:NOTIF_STRIP[1]].astype(int)
+    frac = (np.abs(strip - NOTIF_FILL).max(axis=2) <= 8).mean(axis=1)
+    rows = np.nonzero(frac >= 0.6)[0] + NOTIF_ROWS[0]
+    spans: list[list[int]] = []
+    for y in rows:                       # merge runs split by a line of text
+        if spans and y - spans[-1][1] <= 15:
+            spans[-1][1] = y
+        else:
+            spans.append([y, y])
+    for a, b in spans:
+        dark = int(((rows >= a) & (rows <= b)).sum())
+        if b - a >= 50 and dark >= 50:
+            return int(a), int(b)
+    return None
+
+
 def founder_crate(frame: np.ndarray) -> Optional[Match]:
     """Best match of the Founder drop crate (3 sway poses), or None."""
     if not right_size(frame):
