@@ -1572,16 +1572,48 @@ def test_frozen_screen_restarts_waydroid_once():
     assert out.restart_if_frozen(frozen, st, t0 + 300, go, snd)
     assert restarts == ["all"] and st.get("freeze_restart_at") == t0 + 300
     assert sent[-1] == "Obelisk: restarting Waydroid"
-    t1 = t0 + 3600                                                          # frozen again soon
-    st.set("outage", None)
-    out.report_down("crashed", frozen, st, t1, snd)
-    assert not out.restart_if_frozen(frozen, st, t1 + 600, go, snd) and restarts == ["all"]
     t2 = t0 + 8 * 3600                                                      # much later: again
     st.set("outage", None)
     out.report_down("crashed", frozen, st, t2, snd)
     assert not out.restart_if_frozen(frozen, st, t2 + 600, lambda w: "busy", snd)   # can't start
     assert st.get("freeze_restart_at") == t0 + 300
     assert out.restart_if_frozen(frozen, st, t2 + 660, go, snd) and restarts == ["all", "all"]
+
+
+def test_frozen_screen_after_the_waydroid_restart_reboots_the_pi_once():
+    import obelisk.outage as out
+    st = _jobs.State(_TMP / "freeze_reboot.json")
+    sent, restarts = [], []
+    snd = lambda title, msg, prio, tags, image=None: sent.append(title)
+    go = lambda what: restarts.append(what)
+    frozen = "timeout: adb -s 192.168.240.112:5555 exec-out screencap"
+    t0 = 3_000_000.0
+    out.report_down("crashed", frozen, st, t0, snd)
+    assert out.restart_if_frozen(frozen, st, t0 + 300, go, snd) and restarts == ["all"]
+    # the restarted bot still can't capture: give the restart 10 min first
+    assert not out.restart_if_frozen(frozen, st, t0 + 300 + 120, go, snd)
+    st.set("paused_until", "forever")                                       # someone's on the Pi
+    assert not out.restart_if_frozen(frozen, st, t0 + 300 + 600, go, snd)
+    st.set("paused_until", None)
+    n = len(sent)
+    assert not out.restart_if_frozen(frozen, st, t0 + 300 + 610, lambda w: "denied", snd)
+    assert st.get("freeze_reboot_at") is None and sent[n:] == [
+        "Obelisk: rebooting the Pi", "Obelisk: couldn't reboot the Pi"]
+    assert out.restart_if_frozen(frozen, st, t0 + 300 + 620, go, snd)
+    assert restarts == ["all", "reboot"] and st.get("freeze_reboot_at") == t0 + 920
+    assert sent[-1] == "Obelisk: rebooting the Pi"
+    # frozen again after the reboot (a new outage): no second reboot or restart
+    t1 = t0 + 2 * 3600
+    st.set("outage", None)
+    out.report_down("crashed", frozen, st, t1, snd)
+    assert not out.restart_if_frozen(frozen, st, t1 + 900, go, snd) and restarts == ["all", "reboot"]
+    # a day later both may happen again
+    t2 = t0 + 24 * 3600
+    st.set("outage", None)
+    out.report_down("crashed", frozen, st, t2, snd)
+    assert out.restart_if_frozen(frozen, st, t2 + 300, go, snd)
+    assert out.restart_if_frozen(frozen, st, t2 + 900, go, snd)
+    assert restarts == ["all", "reboot", "all", "reboot"]
 
 
 def test_keep_open_keeps_a_picture_every_5_min():
@@ -1761,6 +1793,7 @@ STATS_LOG = """\
 2026-11-10 00:10:16,000 INFO    obelisk.jobs: interrupt: dismissing a notification at y 616-716
 2026-11-10 00:10:20,000 INFO    obelisk.scheduler: session end: 20 s online; next session 01:00:00
 2026-11-10 00:20:13,000 WARNING obelisk.device: screencap timed out; nudging the host display and retrying
+2026-11-10 01:30:00,000 WARNING obelisk.device: screencap timed out; nudging the host display and retrying
 """
 
 
@@ -1787,10 +1820,13 @@ def test_stats_attribute_gems_to_the_job_before_each_reading():
     # unreadable reading leaves the lootbug job with nothing to claim
     assert t.gems == {"founder": 20, "freebie": 80} and t.earned == 100
     assert (t.jobs["founder claimed"], t.jobs["lootbug looted"], t.jobs["freebie claimed"]) == (1, 1, 1)
-    assert (t.sessions, t.online, t.warnings, t.errors, t.notifications) == (1, 20, 3, 1, 1)
+    # the screencap warning at 00:20 repeats the 00:10 one (one episode), 01:30
+    # is over an hour later (a new one); the failure-screenshot line always
+    # follows another problem: not counted
+    assert (t.sessions, t.online, t.warnings, t.errors, t.notifications) == (1, 20, 2, 1, 1)
     assert [v for _, v in s.balance] == [170, 190, 50, 130]
-    assert s.issues[0] == ("screencap timed out; nudging the host display and retrying", 2)
-    assert all("failure screenshot" not in k for k, _ in s.issues)
+    assert s.issues[0] == ("screencap timed out; nudging the host display and retrying", 2, 3)
+    assert all("failure screenshot" not in k for k, _, _ in s.issues)
     assert s.active_days == 2 and s.job("freebie claimed") == 2
     assert [x.date for x in S.collect(5, today=dt.date(2026, 11, 10), log_dir=d).days][0] == dt.date(2026, 11, 6)
 

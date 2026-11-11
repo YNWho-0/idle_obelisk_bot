@@ -231,7 +231,10 @@ to wake it: with no monitor attached, the desktop once stopped showing the
 game for 3 h until a VNC viewer connected. If screencap still hangs for 5 min
 (Android's screen frozen), the bot restarts Waydroid and itself, as the
 dashboard's Restart Waydroid + bot does, and alerts the phone; at most once
-per 6 h, after which the normal outage alerts carry on. If the bot still gave
+per 6 h. If the screen is still (or again) frozen 10 min after that restart,
+the bot alerts the phone and reboots the Pi (on 2026-11-09 only a reboot
+fixed it); at most once per 6 h and never while the bot is paused. After
+that the normal outage alerts carry on. If the bot still gave
 up, connect with VNC, then `systemctl --user restart obelisk-bot`.
 Every crash/outage alert carries a health picture (`obelisk/health.py`,
 also `venv/bin/python -m obelisk health` or the dashboard's "Check health
@@ -251,7 +254,8 @@ restart Waydroid + game + bot (`scripts/restart_all.sh`, progress in
 Its **Stats & graphs** page (link in the Today card) charts the last 7/14/30/60
 days from the logs: gems earned per day by source (the gem change around each
 claim, so spending doesn't count), the gem balance, founder crates per day,
-problems per day with the most common ones, and a table of the numbers.
+problems per day with the most common ones (the same problem again within an
+hour counts once), and a table of the numbers.
 
 One-off commands (stop the service first):
 

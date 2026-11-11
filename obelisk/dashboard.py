@@ -653,7 +653,8 @@ STATS_PAGE = """<!doctype html><html lang="en"><head>
 <div class="card"><h2>Founder crates per day</h2>{{ v.founder_chart }}</div>
 
 <div class="card"><h2>Problems per day</h2>{{ v.problems_legend }}{{ v.problems_chart }}
- {% if v.s.issues %}<ul class="issues">{% for msg, n in v.s.issues %}<li><span>{{ msg }}</span><b>{{ n }}×</b></li>{% endfor %}</ul>{% endif %}</div>
+ {% if v.s.issues %}<ul class="issues">{% for msg, n, lines in v.s.issues %}<li><span>{{ msg }}{% if lines > n %} <span class="sub">({{ lines }} log lines)</span>{% endif %}</span><b>{{ n }}×</b></li>{% endfor %}</ul>{% endif %}
+ <div class="sub" style="margin:8px 0 0">The same problem again within an hour counts once.</div></div>
 
 <div class="card"><details><summary>Show the numbers as a table</summary><div class="tbl"><table>
  <tr><th>Day</th><th>Gems</th><th>Freebie</th><th>Founder</th><th>Lootbug</th><th>Crates</th><th>Freebies</th><th>Loots</th><th>Sessions</th><th>Min in front</th><th>Problems</th></tr>

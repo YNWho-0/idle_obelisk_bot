@@ -4,6 +4,11 @@ Gems earned are attributed to the job that just ran: the scheduler logs
 "job X -> Y" and then "gem guard: a -> b ok" around each job, so b - a is what
 that job brought in. Spending and cloud downloads happen between jobs and so
 never count as earnings; they only show in the balance line.
+
+Problems are counted as episodes: the same warning/error again within
+REPEAT_GAP of its last occurrence is the same problem still going on (on
+2026-11-09 one frozen screen logged "screencap timed out" 47 times in an hour,
+once per systemd restart).
 """
 
 from __future__ import annotations
@@ -18,12 +23,13 @@ from .summary import RE_LINE
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 SOURCES = ("freebie", "founder", "lootbug")
+REPEAT_GAP = dt.timedelta(hours=1)
 
 RE_JOB = re.compile(r"^job (\w+) -> (\w+)$")
 RE_GEM = re.compile(r"^gem guard: (\d+) -> (\d+) ok$")
 RE_SESSION = re.compile(r"^session end: (\d+) s online")
 RE_NUM = re.compile(r"\d+(\.\d+)?")
-RE_PATH = re.compile(r"/\S+")
+RE_PATH = re.compile(r"(?:/[\w.\-]+){2,}")     # file paths, not "(1/3)"
 
 
 @dataclass
@@ -33,7 +39,7 @@ class Day:
     jobs: Counter = field(default_factory=Counter)     # "founder claimed" -> n
     sessions: int = 0
     online: int = 0                                    # seconds with the game in front
-    warnings: int = 0
+    warnings: int = 0                                  # problem episodes started this day
     errors: int = 0
     notifications: int = 0
     lines: int = 0
@@ -51,7 +57,7 @@ class Day:
 class Stats:
     days: list[Day]                                    # oldest first, one per calendar day
     balance: list[tuple[dt.datetime, int]]             # every gem reading
-    issues: list[tuple[str, int]]                      # most common warnings/errors
+    issues: list[tuple[str, int, int]]                 # (message, episodes, log lines), most first
 
     def total(self, attr: str) -> int:
         return sum(getattr(d, attr) for d in self.days)
@@ -109,19 +115,23 @@ def collect(days: int, today: dt.date | None = None, log_dir: Path = LOG_DIR) ->
         rows.extend(r for r in _parse(path) if r[0] >= since)
     rows.sort(key=lambda r: r[0])
 
-    balance, issues, last_job = [], Counter(), None
+    balance, last_job = [], None
+    issues: dict[str, list] = {}                       # key -> [episodes, lines, last seen]
     for t, level, logger, msg in rows:
         d = by_day.get(t.date())
         if d is None:
             continue
         d.lines += 1
-        if level in ("WARNING", "ERROR", "CRITICAL"):
-            if level == "WARNING":
-                d.warnings += 1
-            else:
-                d.errors += 1
-            if k := issue_key(msg):
-                issues[k] += 1
+        if level in ("WARNING", "ERROR", "CRITICAL") and (k := issue_key(msg)):
+            it = issues.setdefault(k, [0, 0, None])
+            if it[2] is None or t - it[2] > REPEAT_GAP:  # a new episode
+                it[0] += 1
+                if level == "WARNING":
+                    d.warnings += 1
+                else:
+                    d.errors += 1
+            it[1] += 1
+            it[2] = t
         if logger != "obelisk.scheduler" and logger != "obelisk.jobs":
             continue
         if m := RE_JOB.match(msg):
@@ -140,4 +150,6 @@ def collect(days: int, today: dt.date | None = None, log_dir: Path = LOG_DIR) ->
             d.online += int(m.group(1))
         elif msg.startswith("interrupt: dismissing a notification"):
             d.notifications += 1
-    return Stats(days=list(by_day.values()), balance=balance, issues=issues.most_common(6))
+    top = sorted(issues.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:6]
+    return Stats(days=list(by_day.values()), balance=balance,
+                 issues=[(k, n, lines) for k, (n, lines, _) in top])
