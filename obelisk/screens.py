@@ -252,6 +252,18 @@ def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
     return None
 
 
+# Real notification boxes ("Elixir Drone is now Grade 9!", "You found the ...
+# Card!") are a fixed size: 94-100 rows found, even with 4 lines of text.
+# The "Free bomb" / "3x Cherry charges" reward toasts that slide in from the
+# right share the dark fill but are two thin bars, 60-79 rows (2026-11-13).
+NOTIF_MIN_ROWS = 88
+
+
+def is_reward_toast(box: tuple[int, int]) -> bool:
+    """True for a box from notification_box that is a reward toast, not a notice."""
+    return box[1] - box[0] < NOTIF_MIN_ROWS
+
+
 def notification_crop(frame: np.ndarray, box: tuple[int, int]) -> tuple[int, int, int, int]:
     """(x0, y0, x1, y1) framing a notification box found by notification_box,
     border and the icon tab on its right included (the Elixir one: x 0-297).

@@ -1752,6 +1752,24 @@ def test_notification_is_saved_cropped_once_before_the_press():
     assert it.handle(dev, dev.capture()) and len(list(_jobs.NOTIF_DIR.glob("*.png"))) == 1
 
 
+def test_reward_toast_is_pressed_but_not_saved():
+    assert not screens.is_reward_toast(screens.notification_box(FRAMES["notif"]))
+    toast = screens.notification_box(FRAMES["cloud_toast"])          # "Free bomb" toast
+    assert toast is not None and screens.is_reward_toast(toast)
+    for old in _jobs.NOTIF_DIR.glob("*.png") if _jobs.NOTIF_DIR.exists() else []:
+        old.unlink()
+    f = FRAMES["store_closed"].copy()                                # mining screen
+    a, b = toast
+    f[a - 4:b + 3, :] = FRAMES["cloud_toast"][a - 4:b + 3, :]        # toast moved onto it
+    dev = FakeDevice("t", {"t": [((130, a, 234, b), ["after_lootall"])]})
+    FRAMES["t"] = f
+    try:
+        assert NotificationInterrupt().handle(dev, dev.capture()) and dev.presses
+        assert not list(_jobs.NOTIF_DIR.glob("*.png"))
+    finally:
+        del FRAMES["t"]
+
+
 def test_dashboard_shows_todays_notifications_only():
     import obelisk.dashboard as D
     D.CONF = _TMP / "dash.conf"

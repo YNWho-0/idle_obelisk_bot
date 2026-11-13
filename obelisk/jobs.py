@@ -683,7 +683,8 @@ class NotificationInterrupt:
     bug went unlooted for ~7 min behind "Elixir Drone is now Grade 6!").
     Verified by the box disappearing; backs off for 10 min if a press doesn't
     dismiss it, so a box that won't go away is never pressed in a loop.
-    A crop of each box goes to logs/notifications/ first, for the dashboard."""
+    A crop of each box goes to logs/notifications/ first, for the dashboard;
+    "Free bomb" / "Cherry charges" reward toasts are pressed away but not kept."""
 
     MIN_GAP = 60
     BACKOFF = 600
@@ -722,8 +723,11 @@ class NotificationInterrupt:
         if box is None:
             return False
         self.next_ok = now + self.MIN_GAP
-        self.save(frame, box)
-        log.info("interrupt: dismissing a notification at y %d-%d", *box)
+        if screens.is_reward_toast(box):      # not counted on the stats page either
+            log.info("interrupt: dismissing a reward toast at y %d-%d", *box)
+        else:
+            self.save(frame, box)
+            log.info("interrupt: dismissing a notification at y %d-%d", *box)
         dev.press(self.PRESS_X, (box[0] + box[1]) // 2)
         if wait_for(dev, lambda f: screens.notification_box(f) is None, timeout=3) is None:
             log.warning("notification still shown after the press; leaving it for %d min",
